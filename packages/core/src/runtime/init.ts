@@ -1222,24 +1222,46 @@ export function initSandboxRuntimeModular(): void {
     metadataBoundMedia.clear();
   };
 
+  const isRenderMode = Boolean((window as Record<string, unknown>).__HF_EXPORT_RENDER_SEEK_CONFIG);
+  const mediaPreloader = createMediaPreloadManager();
+
   const bindMediaMetadataListeners = () => {
     if (state.tornDown) return;
     const mediaEls = Array.from(document.querySelectorAll("video, audio")) as HTMLMediaElement[];
+
+    let newElementsBound = false;
     for (const mediaEl of mediaEls) {
       if (metadataBoundMedia.has(mediaEl)) continue;
       metadataBoundMedia.add(mediaEl);
+      newElementsBound = true;
       mediaEl.addEventListener("loadedmetadata", scheduleMetadataDurationHydration);
       mediaEl.addEventListener("durationchange", scheduleMetadataDurationHydration);
+    }
 
-      // Eagerly preload media data so audio/video is buffered before the user
-      // clicks play. Without this, the first play() call fires on un-fetched
-      // media, producing silence or choppy audio until the browser caches it.
-      if (mediaEl.preload !== "auto") {
-        mediaEl.preload = "auto";
+    if (newElementsBound) {
+      mediaPreloader.refresh();
+    }
+
+    if (!mediaPreloader.isLazy() || isRenderMode) {
+      for (const mediaEl of mediaEls) {
+        if (mediaEl.preload !== "auto") {
+          mediaEl.preload = "auto";
+        }
+        if (mediaEl.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+          mediaEl.load();
+        }
       }
-      if (mediaEl.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
-        mediaEl.load();
+    } else {
+      for (const mediaEl of mediaEls) {
+        if (!mediaEl.hasAttribute("data-start")) continue;
+        if (mediaEl.preload === "auto" || mediaEl.preload === "") {
+          mediaEl.preload = "metadata";
+        }
+        if (mediaEl.readyState < HTMLMediaElement.HAVE_METADATA) {
+          mediaEl.load();
+        }
       }
+      mediaPreloader.preloadAroundTime(Math.max(0, state.currentTime || 0));
     }
   };
 
@@ -1787,6 +1809,9 @@ export function initSandboxRuntimeModular(): void {
 
       if (clock.isPlaying()) {
         syncMediaForCurrentState();
+        if (mediaPreloader.isLazy() && transportTickCount % 10 === 0) {
+          mediaPreloader.sync(Math.max(0, state.currentTime || 0));
+        }
       }
       postState(false);
     } finally {
@@ -1821,6 +1846,7 @@ export function initSandboxRuntimeModular(): void {
   player.play = () => {
     const tl = state.capturedTimeline;
     if (!tl || clock.isPlaying()) return;
+    mediaPreloader.preloadAroundTime(Math.max(0, state.currentTime || 0));
     const dur = getSafeTimelineDurationSeconds(tl, 0);
     if (dur > 0) {
       clock.setDuration(dur);
@@ -1890,6 +1916,7 @@ export function initSandboxRuntimeModular(): void {
       Math.max(0, Number(timeSeconds) || 0),
       state.canonicalFps,
     );
+    mediaPreloader.preloadAroundTime(quantized);
     webAudio.stopAll();
     clock.detachAudioSource();
     const wasPlaying = clock.isPlaying();
