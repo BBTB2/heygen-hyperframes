@@ -53,7 +53,6 @@ import {
   muxVideoWithAudio,
   applyFaststart,
   getEncoderPreset,
-  processCompositionAudio,
   calculateOptimalWorkers,
   distributeFrames,
   executeParallelCapture,
@@ -101,6 +100,7 @@ import {
 import { runCompileStage } from "./render/stages/compileStage.js";
 import { runProbeStage } from "./render/stages/probeStage.js";
 import { runExtractVideosStage } from "./render/stages/extractVideosStage.js";
+import { runAudioStage } from "./render/stages/audioStage.js";
 
 /**
  * Wrap a cleanup operation so it never throws, but logs any failure.
@@ -2076,30 +2076,20 @@ export async function executeRenderJob(
     }
 
     // ── Stage 3: Audio processing ───────────────────────────────────────
-    const stage3Start = Date.now();
     updateJobStatus(job, "preprocessing", "Processing audio tracks", 20, onProgress);
 
-    const audioOutputPath = join(workDir, "audio.aac");
-    let hasAudio = false;
-
-    if (composition.audios.length > 0) {
-      const audioResult = await processCompositionAudio(
-        composition.audios,
-        projectDir,
-        join(workDir, "audio-work"),
-        audioOutputPath,
-        job.duration,
-        abortSignal,
-        undefined,
-        compiledDir,
-      );
-      assertNotAborted();
-
-      hasAudio = audioResult.success;
-      perfStages.audioProcessMs = Date.now() - stage3Start;
-    } else {
-      perfStages.audioProcessMs = Date.now() - stage3Start;
-    }
+    const audioResult = await runAudioStage({
+      projectDir,
+      workDir,
+      compiledDir,
+      job,
+      duration: job.duration,
+      audios: composition.audios,
+      abortSignal,
+      assertNotAborted,
+    });
+    const { audioOutputPath, hasAudio } = audioResult;
+    perfStages.audioProcessMs = audioResult.audioProcessMs;
 
     // ── Stage 4: Frame capture ──────────────────────────────────────────
     const stage4Start = Date.now();
