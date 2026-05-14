@@ -160,11 +160,15 @@ export function pauseStudioPreviewPlayback(iframe: HTMLIFrameElement | null): nu
   if (!win) return null;
 
   try {
-    let pausedTime: number | null = null;
     const player = objectLike(Reflect.get(win, "__player"));
-    pausedTime = readPlaybackTime(player, "getTime") ?? pausedTime;
-    callPlaybackMethod(player, "pause");
+    const playerPausedTime = readPlaybackTime(player, "getTime");
+    const playerPause = player ? Reflect.get(player, "pause") : null;
+    if (typeof playerPause === "function") {
+      callPlaybackMethod(player, "pause");
+      return playerPausedTime;
+    }
 
+    let pausedTime: number | null = null;
     const timeline = objectLike(Reflect.get(win, "__timeline"));
     pausedTime = pausedTime ?? readPlaybackTime(timeline, "time");
     callPlaybackMethod(timeline, "pause");
