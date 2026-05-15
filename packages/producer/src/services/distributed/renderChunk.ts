@@ -291,6 +291,26 @@ function hashChunkOutput(outputPath: string, kind: "file" | "frame-dir"): string
 }
 
 /**
+ * Apply the planDir's locked-encoder choice on top of an
+ * `EncoderPreset` from `getEncoderPreset`. `getEncoderPreset` returns
+ * h265 only on the HDR branch, but distributed mode is SDR-only — for
+ * an `libx265-software` planDir we still need to flip the preset's
+ * codec to h265 so `runEncodeStage` invokes libx265. Exported so a
+ * unit test can pin the override independently of the heavyweight
+ * Docker fixture: a refactor that moves the override (e.g. into
+ * `getEncoderPreset` itself) shouldn't be able to silently regress
+ * the contract without a fast-test signal.
+ */
+export function resolvePresetForLockedEncoder<
+  P extends { codec: "h264" | "h265" | "vp9" | "prores" },
+>(basePreset: P, lockedEncoder: LockedRenderConfig["encoder"]): P {
+  if (lockedEncoder === "libx265-software") {
+    return { ...basePreset, codec: "h265" as const };
+  }
+  return basePreset;
+}
+
+/**
  * Activity B: render a single chunk of the planDir. The `outputChunkPath`
  * argument is a file for mp4/mov outputs and a directory for png-sequence
  * outputs — the caller picks the right shape based on `meta/encoder.json`.
@@ -552,7 +572,8 @@ export async function renderChunk(
       const presetFormat: "mp4" | "mov" | "webm" = isPngSequence
         ? "mp4"
         : (plan.dimensions.format as "mp4" | "mov");
-      const preset = getEncoderPreset(job.config.quality, presetFormat, undefined);
+      const basePreset = getEncoderPreset(job.config.quality, presetFormat, undefined);
+      const preset = resolvePresetForLockedEncoder(basePreset, encoder.encoder);
       const effectiveQuality = encoder.crf ?? preset.quality;
       const effectiveBitrate = encoder.crf != null ? undefined : encoder.bitrate;
       // For non-pngseq, encodeStage writes to `outputPath` when `isPngSequence`

@@ -29,6 +29,7 @@ import {
   PLAN_HASH_MISMATCH,
   renderChunk,
   RenderChunkValidationError,
+  resolvePresetForLockedEncoder,
 } from "./renderChunk.js";
 
 // Tiny fixture: 5 frames at 30fps. Captures finish in a few seconds on the
@@ -308,4 +309,42 @@ describe("renderChunk()", () => {
     },
     TIMEOUT_MS,
   );
+});
+
+describe("resolvePresetForLockedEncoder", () => {
+  // Tiny fast tests for the codec-override helper. No Chrome, no ffmpeg —
+  // exists so a refactor that moves the override (e.g. into
+  // `getEncoderPreset` itself) gets caught here before the heavyweight
+  // Docker fixture is even run.
+  it("flips codec from h264 to h265 when encoder is libx265-software", () => {
+    const base = { preset: "medium", quality: 18, codec: "h264" as const, pixelFormat: "yuv420p" };
+    const out = resolvePresetForLockedEncoder(base, "libx265-software");
+    expect(out.codec).toBe("h265");
+    expect(out.preset).toBe("medium");
+    expect(out.quality).toBe(18);
+    expect(out.pixelFormat).toBe("yuv420p");
+  });
+
+  it("leaves the preset unchanged for libx264-software", () => {
+    const base = { preset: "medium", quality: 18, codec: "h264" as const, pixelFormat: "yuv420p" };
+    const out = resolvePresetForLockedEncoder(base, "libx264-software");
+    expect(out).toBe(base);
+  });
+
+  it("leaves the preset unchanged for prores-software", () => {
+    const base = {
+      preset: "4444",
+      quality: 18,
+      codec: "prores" as const,
+      pixelFormat: "yuva444p10le",
+    };
+    const out = resolvePresetForLockedEncoder(base, "prores-software");
+    expect(out).toBe(base);
+  });
+
+  it("leaves the preset unchanged for png-sequence", () => {
+    const base = { preset: "medium", quality: 18, codec: "h264" as const, pixelFormat: "yuv420p" };
+    const out = resolvePresetForLockedEncoder(base, "png-sequence");
+    expect(out).toBe(base);
+  });
 });
