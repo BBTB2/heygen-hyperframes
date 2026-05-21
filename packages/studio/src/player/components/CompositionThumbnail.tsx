@@ -5,7 +5,6 @@ interface CompositionThumbnailProps {
   previewUrl: string;
   label: string;
   labelColor: string;
-  accentColor?: string;
   selector?: string;
   selectorIndex?: number;
   seekTime?: number;
@@ -52,7 +51,6 @@ export const CompositionThumbnail = memo(function CompositionThumbnail({
   previewUrl,
   label,
   labelColor,
-  accentColor: _accentColor = "#6B7280",
   selector,
   selectorIndex,
   seekTime = 2,
@@ -112,7 +110,7 @@ export const CompositionThumbnail = memo(function CompositionThumbnail({
       {loaded && (
         <div
           className="absolute inset-0 flex"
-          style={{ animation: "fadeIn 200ms ease-out", mixBlendMode: "lighten" }}
+          style={{ animation: "hf-thumb-fade 200ms ease-out", mixBlendMode: "lighten" }}
         >
           {Array.from({ length: frameCount }).map((_, i) => (
             <div

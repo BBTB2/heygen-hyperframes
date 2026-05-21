@@ -35,16 +35,12 @@ export interface TimelineTheme {
   clipRadius: string;
 }
 
-const UNIFIED_STYLE: TimelineTrackStyle = {
+const TRACK_STYLE: TimelineTrackStyle = {
   clip: "#1c2028",
   accent: "#3CE6AC",
   label: "#dde1e8",
   iconBackground: "rgba(255,255,255,0.06)",
 };
-
-function createTrackStyle(_tag: string): TimelineTrackStyle {
-  return UNIFIED_STYLE;
-}
 
 export const defaultTimelineTheme: TimelineTheme = {
   shellBackground: "#0A0A0B",
@@ -74,16 +70,8 @@ export const defaultTimelineTheme: TimelineTheme = {
   clipRadius: "6px",
 };
 
-export function getTimelineTrackStyle(tag: string): TimelineTrackStyle {
-  const normalized = tag.toLowerCase();
-  if (
-    normalized.startsWith("h") &&
-    normalized.length === 2 &&
-    "123456".includes(normalized[1] ?? "")
-  ) {
-    return createTrackStyle("h1");
-  }
-  return createTrackStyle(normalized);
+export function getTimelineTrackStyle(_tag: string): TimelineTrackStyle {
+  return TRACK_STYLE;
 }
 
 export function getClipHandleOpacity({

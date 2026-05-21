@@ -5,6 +5,23 @@ import type { TimelineElement } from "../player";
 import { AudioWaveform } from "../player/components/AudioWaveform";
 import { getTimelineElementLabel } from "../utils/studioHelpers";
 
+export function normalizeCompositionSrc(
+  compSrc: string,
+  projectId: string,
+  origin: string,
+): string {
+  try {
+    const parsed = new URL(compSrc, origin);
+    const previewPrefix = `/api/projects/${projectId}/preview/`;
+    if (parsed.pathname.startsWith(previewPrefix)) {
+      return parsed.pathname.slice(previewPrefix.length);
+    }
+  } catch {
+    // already relative
+  }
+  return compSrc;
+}
+
 interface UseRenderClipContentOptions {
   projectIdRef: { current: string | null };
   compIdToSrc: Map<string, string>;
@@ -25,15 +42,7 @@ export function useRenderClipContent({
 
       let compSrc = el.compositionSrc;
       if (compSrc) {
-        try {
-          const parsed = new URL(compSrc, window.location.origin);
-          const previewPrefix = `/api/projects/${pid}/preview/`;
-          if (parsed.pathname.startsWith(previewPrefix)) {
-            compSrc = parsed.pathname.slice(previewPrefix.length);
-          }
-        } catch {
-          // already relative
-        }
+        compSrc = normalizeCompositionSrc(compSrc, pid, window.location.origin);
       }
       if (compSrc && compIdToSrc.size > 0) {
         const resolved =
@@ -50,7 +59,7 @@ export function useRenderClipContent({
           previewUrl: `/api/projects/${pid}/preview/comp/${compSrc}`,
           label: getTimelineElementLabel(el),
           labelColor: style.label,
-          accentColor: style.clip,
+
           seekTime: 0,
           duration: el.duration,
         });
@@ -63,7 +72,7 @@ export function useRenderClipContent({
           previewUrl: activePreviewUrl,
           label: getTimelineElementLabel(el),
           labelColor: style.label,
-          accentColor: style.clip,
+
           selector: el.selector,
           selectorIndex: el.selectorIndex,
           seekTime: el.start,
@@ -119,7 +128,7 @@ export function useRenderClipContent({
           previewUrl: `/api/projects/${pid}/preview`,
           label: getTimelineElementLabel(el),
           labelColor: style.label,
-          accentColor: style.clip,
+
           selector: el.selector,
           selectorIndex: el.selectorIndex,
           seekTime: el.start,
