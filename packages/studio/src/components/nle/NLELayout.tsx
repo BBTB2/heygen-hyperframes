@@ -13,6 +13,7 @@ import type { TimelineElement } from "../../player";
 import type { BlockedTimelineEditIntent } from "../../player/components/timelineEditing";
 import { NLEPreview } from "./NLEPreview";
 import { CompositionBreadcrumb } from "./CompositionBreadcrumb";
+import { usePreviewBlockDrop } from "./usePreviewBlockDrop";
 import { useCompositionStack } from "./useCompositionStack";
 import {
   TIMELINE_TOGGLE_SHORTCUT_LABEL,
@@ -135,6 +136,22 @@ export const NLELayout = memo(function NLELayout({
     prevProjectIdRef.current = projectId;
     usePlayerStore.getState().reset();
   }
+
+  const stageRefForDrop = useRef<HTMLDivElement | null>(null);
+  const handleStageRef = useCallback((ref: React.RefObject<HTMLDivElement | null>) => {
+    stageRefForDrop.current = ref.current;
+  }, []);
+
+  const {
+    isDragOver: previewDragOver,
+    handleDragOver: handlePreviewDragOver,
+    handleDragLeave: handlePreviewDragLeave,
+    handleDrop: handlePreviewDrop,
+  } = usePreviewBlockDrop({
+    portrait,
+    stageRef: stageRefForDrop as React.RefObject<HTMLDivElement | null>,
+    onBlockDrop: onPreviewBlockDrop,
+  });
 
   // Lightweight reload: change iframe src instead of destroying the Player.
   // refreshPlayer() saves the seek position and appends a cache-busting _t
@@ -349,7 +366,13 @@ export const NLELayout = memo(function NLELayout({
     >
       {/* Preview + player controls */}
       <div className="flex-1 min-h-0 flex flex-col">
-        <div className="flex-1 min-h-0 relative" data-preview-pan-surface="true">
+        <div
+          className="flex-1 min-h-0 relative"
+          data-preview-pan-surface="true"
+          onDragOver={handlePreviewDragOver}
+          onDragLeave={handlePreviewDragLeave}
+          onDrop={handlePreviewDrop}
+        >
           <NLEPreview
             projectId={projectId}
             iframeRef={iframeRef}
@@ -358,8 +381,11 @@ export const NLELayout = memo(function NLELayout({
             portrait={portrait}
             directUrl={directUrl}
             suppressLoadingOverlay={hasLoadedOnceRef.current}
-            onBlockDrop={onPreviewBlockDrop}
+            onStageRef={handleStageRef}
           />
+          {previewDragOver && (
+            <div className="absolute inset-2 z-40 rounded-lg border-2 border-dashed border-studio-accent/50 bg-studio-accent/[0.04] pointer-events-none" />
+          )}
           {!isFullscreen && previewOverlay}
         </div>
         <div className="bg-neutral-950 border-t border-neutral-800/50 flex-shrink-0">
