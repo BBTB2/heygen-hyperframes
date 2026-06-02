@@ -22,9 +22,16 @@ If a feature should ship in alpha only, merge or retarget that PR to a prereleas
 ## Stable release
 
 Stable releases must be reachable from `origin/main` or `origin/release/v*`.
+Draft and review release notes before creating the release commit:
 
 ```bash
-bun run set-version 0.4.24
+bun run changelog:draft <version> --write
+```
+
+See [Changelog process](/contributing/changelog-process) for the full workflow. For stable releases, `bun run set-version <version>` enforces this checkpoint before creating the release commit and tag.
+
+```bash
+bun run set-version <version>
 git push origin main --tags
 ```
 
@@ -33,6 +40,7 @@ For hotfixes, branch from the last stable tag, cherry-pick only the fix, publish
 ## Alpha release
 
 Alpha releases must be reachable from a prerelease branch such as `origin/next` or `origin/alpha`.
+Use the same changelog draft workflow when the prerelease contains changes that users should know about.
 
 ```bash
 git checkout next
