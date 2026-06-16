@@ -312,12 +312,15 @@ describe("runShadowDelete", () => {
     </div>
   </body></html>`;
 
-  it("CORRECTLY reports present/removed for the SDK duplicate-bare-id delete divergence", async () => {
+  it("reports clean delete for a duplicate bare id (SDK resolves removeElement/getElement to the same instance)", async () => {
     const session = await openComposition(DUP_ID_HTML);
     runShadowDelete(session, "hf-dup");
-    // removeElement dropped the inner instance; the top-level one survives, so the
-    // readback truthfully flags one mismatch (not silently passed).
-    expect(lastShadow()).toMatchObject({ op: "delete", dispatched: true, mismatchCount: 1 });
+    // SDK fix (agree removeElement/getElement on duplicate bare ids): both now
+    // resolve a bare id to the canonical (top-level) instance, so removeElement
+    // drops exactly the element the readback checks → no mismatch. (Previously
+    // removeElement dropped the inner instance while the top-level survived,
+    // which this shadow correctly flagged; that divergence is now fixed.)
+    expect(lastShadow()).toMatchObject({ op: "delete", dispatched: true, mismatchCount: 0 });
   });
 });
 
