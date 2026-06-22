@@ -9,6 +9,21 @@ Recent HyperFrames releases, including user-facing features, fixes, and migratio
 {/* New release entries are prepended by `bun run changelog:draft <version> --write`. */}
 
 <Update
+  label="HyperFrames v0.7.1"
+  description="Released - 2026-06-22"
+  tags={["Release", "Studio", "Producer"]}
+>
+Fixes gesture recording selection sync and video-heavy render base64 frame injection.
+
+## Fixes
+
+- **Studio:** `selectedGsapAnimations` empty after gesture recording — motion path nodes non-interactive, timeline diamonds missing. Root cause: animation fetch dedup key didn't include the selection target, and the preview sync didn't re-run after soft reloads ([82a5298](https://github.com/heygen-com/hyperframes/commit/82a529805), [#1646](https://github.com/heygen-com/hyperframes/pull/1646))
+- **Producer:** Inline base64 frames in injector to unblock video-heavy renders ([4be81b4](https://github.com/heygen-com/hyperframes/commit/4be81b4fb), [#1630](https://github.com/heygen-com/hyperframes/pull/1630))
+
+[View the full commit range](https://github.com/heygen-com/hyperframes/compare/v0.7.0...v0.7.1).
+</Update>
+
+<Update
   label="HyperFrames v0.7.0"
   description="Released - 2026-06-22"
   tags={["Release", "Studio", "Core", "Skills"]}
