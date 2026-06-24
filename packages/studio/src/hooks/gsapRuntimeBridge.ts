@@ -239,7 +239,9 @@ export async function tryGsapDragIntercept(
   // `tl.set("#el",{x,y})`, not a keyframe conversion: re-nudge an existing set in
   // place (idempotent), else add a new one. This also covers the stale-cache
   // phantom — committing a set is correct because the element genuinely has no live motion.
-  if (!hasNonHoldTweenForElement(iframe, selector)) {
+  const hasNonHold = hasNonHoldTweenForElement(iframe, selector);
+
+  if (!hasNonHold) {
     const existingSet =
       posAnim && posAnim.method === "set" && posAnim.targetSelector === selector
         ? posAnim
@@ -251,7 +253,9 @@ export async function tryGsapDragIntercept(
     return true;
   }
 
-  if (!posAnim) return false;
+  if (!posAnim) {
+    return false;
+  }
 
   // Verify the anim ID is still valid in the current file. The React-state
   // `animations` list can lag behind the file after a prior mutation changed
