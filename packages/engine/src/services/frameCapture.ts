@@ -95,6 +95,16 @@ export interface CaptureSession {
   pageReleased?: boolean;
   browserReleased?: boolean;
   browserConsoleBuffer: string[];
+  /**
+   * Script resources that failed to load (request failure or HTTP >= 400).
+   * pollSubCompositionTimelines fail-fasts on these: a comp whose timeline
+   * script 404'd can never register window.__timelines[id], so waiting the
+   * full playerReadyTimeout (45s) buys nothing (~1% of wild local renders
+   * were hitting that wall — a 705-render spike at the 45s setup bucket).
+   */
+  scriptLoadFailures: string[];
+  /** Outcome of the sub-composition timeline wait: ready | timeout | script_failure. */
+  subTimelineWaitOutcome?: "ready" | "timeout" | "script_failure";
   initTelemetry?: {
     initDurationMs: number;
     tweenCount: number;
@@ -929,6 +939,7 @@ export async function createCaptureSession(
     onBeforeCapture,
     isInitialized: false,
     browserConsoleBuffer: [],
+    scriptLoadFailures: [],
     capturePerf: {
       frames: 0,
       seekMs: 0,
@@ -999,21 +1010,6 @@ export function formatConsoleDiagnostic(
         : "[Browser]";
 
   return { text: `${prefix} ${text}`, suppressHostLog: false };
-}
-
-async function pollPageExpression(
-  page: Page,
-  expression: string,
-  timeoutMs: number,
-  intervalMs: number = 100,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const ready = Boolean(await page.evaluate(expression));
-    if (ready) return true;
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-  return Boolean(await page.evaluate(expression));
 }
 
 const HF_READY_DIAGNOSTIC_EXPR = `(function() {
@@ -1151,11 +1147,19 @@ async function pollHfReady(page: Page, timeoutMs: number, intervalMs: number = 1
   );
 }
 
-async function pollSubCompositionTimelines(
+export async function pollSubCompositionTimelines(
   page: Page,
   timeoutMs: number,
   intervalMs: number = 150,
-): Promise<void> {
+  // Fail-fast hook: when a SCRIPT resource failed to load (404 / request
+  // failure), the timeline registration it carried can never arrive — the
+  // full-timeout wait buys nothing (measured: a 705-render spike at the 45s
+  // setup bucket in 30 days of wild local renders, ~1% of renders, each also
+  // shipping silently-broken animations). Once failures are present the poll
+  // is cut to `scriptFailureGraceMs` from its start.
+  getScriptLoadFailures?: () => readonly string[],
+  scriptFailureGraceMs: number = 2_000,
+): Promise<"ready" | "timeout" | "script_failure"> {
   // Hosts may opt out of the timeline wait with `data-no-timeline` —
   // compositions driven purely by CSS animations / rAF (the render-compat
   // contract) never register window.__timelines[id], and without the opt-out
@@ -1172,7 +1176,28 @@ async function pollSubCompositionTimelines(
     }
     return true;
   })()`;
-  const ready = await pollPageExpression(page, expression, timeoutMs, intervalMs);
+  const start = Date.now();
+  const deadline = start + timeoutMs;
+  let ready = false;
+  let scriptFailureBail = false;
+  for (;;) {
+    ready = Boolean(await page.evaluate(expression));
+    if (ready) break;
+    const now = Date.now();
+    if (now >= deadline) break;
+    const failures = getScriptLoadFailures?.() ?? [];
+    if (failures.length > 0 && now - start >= scriptFailureGraceMs) {
+      scriptFailureBail = true;
+      console.warn(
+        `[FrameCapture] Sub-composition timeline wait cut short after ${now - start}ms: ` +
+          `script resource(s) failed to load (${failures.join(", ")}) — ` +
+          `the timeline registration they carry can never arrive. ` +
+          `Fix the script reference; the render proceeds without those animations.`,
+      );
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
   // Always force a timeline rebind once sub-composition timelines are
   // confirmed present. The previous implementation only called rebind
   // when the timeline count grew during the poll, which missed the case
@@ -1186,8 +1211,9 @@ async function pollSubCompositionTimelines(
         window.__hfForceTimelineRebind();
       }
     })()`);
+    return "ready";
   }
-  if (!ready) {
+  if (!scriptFailureBail) {
     const missing = await page.evaluate(`(function() {
       var hosts = document.querySelectorAll("[data-composition-id]");
       var timelines = window.__timelines || {};
@@ -1205,6 +1231,7 @@ async function pollSubCompositionTimelines(
         `Compositions intentionally driven without GSAP timelines (CSS animations / rAF) can mark the host with data-no-timeline to skip this wait.`,
     );
   }
+  return scriptFailureBail ? "script_failure" : "timeout";
 }
 
 async function pollVideosReady(
@@ -1411,6 +1438,9 @@ export async function initializeSession(session: CaptureSession): Promise<void> 
   });
 
   page.on("requestfailed", (request) => {
+    if (request.resourceType() === "script") {
+      session.scriptLoadFailures.push(request.url());
+    }
     appendBrowserDiagnostic(
       session,
       formatRequestFailureDiagnostic({
@@ -1427,6 +1457,9 @@ export async function initializeSession(session: CaptureSession): Promise<void> 
     if (status < 400) return;
 
     const request = response.request();
+    if (request.resourceType() === "script") {
+      session.scriptLoadFailures.push(response.url());
+    }
     appendBrowserDiagnostic(
       session,
       formatHttpErrorDiagnostic({
@@ -1491,8 +1524,13 @@ export async function initializeSession(session: CaptureSession): Promise<void> 
     await pollHfReady(page, pageReadyTimeout);
     logInitPhase("pollHfReady complete");
 
-    await pollSubCompositionTimelines(page, pageReadyTimeout);
-    logInitPhase("pollSubCompositionTimelines complete");
+    session.subTimelineWaitOutcome = await pollSubCompositionTimelines(
+      page,
+      pageReadyTimeout,
+      undefined,
+      () => session.scriptLoadFailures,
+    );
+    logInitPhase(`pollSubCompositionTimelines complete (${session.subTimelineWaitOutcome})`);
 
     await applyVideoMetadataHints(page, session.options.videoMetadataHints);
     logInitPhase("applyVideoMetadataHints complete");
@@ -1626,8 +1664,13 @@ export async function initializeSession(session: CaptureSession): Promise<void> 
     throw err;
   }
 
-  await pollSubCompositionTimelines(page, pageReadyTimeout);
-  logInitPhase("pollSubCompositionTimelines complete");
+  session.subTimelineWaitOutcome = await pollSubCompositionTimelines(
+    page,
+    pageReadyTimeout,
+    undefined,
+    () => session.scriptLoadFailures,
+  );
+  logInitPhase(`pollSubCompositionTimelines complete (${session.subTimelineWaitOutcome})`);
 
   await applyVideoMetadataHints(page, session.options.videoMetadataHints);
   logInitPhase("applyVideoMetadataHints complete");
@@ -3086,6 +3129,7 @@ export function getCapturePerfSummary(session: CaptureSession): CapturePerfSumma
     avgBeforeCaptureMs: Math.round(session.capturePerf.beforeCaptureMs / frames),
     avgScreenshotMs: Math.round(session.capturePerf.screenshotMs / frames),
     p50TotalMs: medianOf(session.capturePerf.frameMs),
+    subTimelineWaitOutcome: session.subTimelineWaitOutcome,
     staticDedupReused: session.staticDedupCount ?? 0,
     staticDedupEnabled: session.staticDedupEnabled ?? false,
     // armed ⟺ a non-empty static set survived verification; predicted === its size.

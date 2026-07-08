@@ -322,6 +322,8 @@ export interface RenderPerfSummary {
    * captured the most frames when parallel workers report separately.
    */
   captureP50Ms?: number;
+  /** Worst sub-composition timeline wait outcome across sessions: ready | timeout | script_failure. */
+  subTimelineWait?: string;
   capturePeakMs?: number;
   captureCalibration?: {
     sampledFrames: number[];

@@ -189,6 +189,16 @@ export function buildRenderPerfSummary(input: {
               input.totalFrames,
           )
         : undefined,
+    subTimelineWait: (() => {
+      const outcomes = input.dedupPerfs
+        .map((p) => p.subTimelineWaitOutcome)
+        .filter((o): o is string => !!o);
+      if (outcomes.length === 0) return undefined;
+      // Worst outcome wins: script_failure > timeout > ready.
+      if (outcomes.includes("script_failure")) return "script_failure";
+      if (outcomes.includes("timeout")) return "timeout";
+      return "ready";
+    })(),
     captureP50Ms: (() => {
       // Per-frame median from the engine's samples; when parallel workers
       // report separately, take the busiest session's median.

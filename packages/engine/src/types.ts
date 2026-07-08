@@ -183,6 +183,8 @@ export interface CapturePerfSummary {
    * averages). Basis for in-the-wild speedup estimates. 0 when no frames.
    */
   p50TotalMs: number;
+  /** Sub-composition timeline wait outcome: ready | timeout | script_failure (absent pre-init). */
+  subTimelineWaitOutcome?: string;
   /**
    * Frames served from the static-dedup cache instead of a real seek+screenshot
    * (opt-out HF_STATIC_DEDUP=false). 0 when dedup was off or never armed. NOT counted

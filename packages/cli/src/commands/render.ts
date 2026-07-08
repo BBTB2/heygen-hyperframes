@@ -1708,6 +1708,7 @@ function trackRenderMetrics(
     speedRatio,
     captureAvgMs: perf?.captureAvgMs,
     captureP50Ms: perf?.captureP50Ms,
+    subTimelineWait: perf?.subTimelineWait,
     videoCount: perf?.videoCount,
     capturePeakMs: perf?.capturePeakMs,
     tmpPeakBytes: perf?.tmpPeakBytes,
