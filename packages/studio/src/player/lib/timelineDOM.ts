@@ -155,7 +155,11 @@ export function createTimelineElementFromManifestClip(params: {
     start: clip.start,
     duration: clip.duration,
     track: clip.track,
-    zIndex: clip.zIndex ?? getTimelineElementZIndex(hostEl),
+    // Prefer the effective (computed) z-index read from the live element — the
+    // same read the reorder commit uses — so CSS-rule z-index (not just inline)
+    // is captured. clip.zIndex from the runtime is inline-only (0 for CSS rules),
+    // so it can only serve as a fallback when the element isn't live.
+    zIndex: getTimelineElementZIndex(hostEl) ?? clip.zIndex ?? 0,
     stackingContextId,
     parentCompositionId,
     compositionAncestors,

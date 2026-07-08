@@ -102,6 +102,40 @@ describe("parseTimelineFromDOM — hfId from data-hf-id", () => {
 
     expect(element.hidden).toBe(true);
   });
+
+  it("captures the effective z-index from the live element, not the runtime inline-only value", () => {
+    // The runtime reports inline-only z-index (0 for CSS-rule authored z-index),
+    // which must NOT override the live element's effective z-index — otherwise
+    // the timeline collapses every CSS-styled clip to a z=0 tie and mis-orders.
+    const doc = makeDoc(`
+      <div data-composition-id="root">
+        <div id="hero" class="clip" data-start="0" data-duration="5" style="z-index: 30"></div>
+      </div>
+    `);
+    const hostEl = doc.getElementById("hero");
+
+    const element = createTimelineElementFromManifestClip({
+      clip: {
+        id: "hero",
+        label: "Hero",
+        kind: "element",
+        tagName: "div",
+        start: 0,
+        duration: 5,
+        track: 0,
+        zIndex: 0,
+        compositionId: null,
+        parentCompositionId: null,
+        compositionSrc: null,
+        assetUrl: null,
+      },
+      fallbackIndex: 0,
+      doc,
+      hostEl,
+    });
+
+    expect(element.zIndex).toBe(30);
+  });
 });
 
 describe("createImplicitTimelineLayersFromDOM — hfId from data-hf-id", () => {
