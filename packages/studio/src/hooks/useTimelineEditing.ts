@@ -1,5 +1,3 @@
-// Pre-existing-complex timeline hook (DOM patch + GSAP position shift/scale +
-// playback-start resolution).
 // fallow-ignore-file complexity
 import { useCallback, useRef } from "react";
 import type { TimelineElement } from "../player";
@@ -40,14 +38,13 @@ import {
   useTimelineElementVisibilityEditing,
   useTimelineTrackVisibilityEditing,
 } from "./timelineTrackVisibility";
+import { useTimelineGroupEditing } from "./useTimelineGroupEditing";
 import { sdkTimingPersist } from "../utils/sdkCutover";
 import type { UseTimelineEditingOptions } from "./useTimelineEditingTypes";
 
 type TimelineMoveUpdates = Pick<TimelineElement, "start" | "track"> & {
   stackingReorder?: TimelineStackingReorderIntent | null;
 };
-
-// ── Hook ──
 
 export function useTimelineEditing({
   projectId,
@@ -101,7 +98,6 @@ export function useTimelineEditing({
           }),
         )
         .then(() => {
-          // Server wrote the file; resync the stale in-memory SDK doc.
           forceReloadSdkSession?.();
         });
       editQueueRef.current = queued.catch((error) => {
@@ -120,6 +116,21 @@ export function useTimelineEditing({
       forceReloadSdkSession,
     ],
   );
+  const groupEditing = useTimelineGroupEditing({
+    activeCompPath,
+    domEditSaveTimestampRef,
+    editQueueRef,
+    forceReloadSdkSession,
+    isRecordingRef,
+    pendingTimelineEditPathRef,
+    previewIframeRef,
+    projectIdRef,
+    recordEdit,
+    reloadPreview,
+    sdkSession,
+    showToast,
+    writeProjectFile,
+  });
 
   // fallow-ignore-next-line complexity
   const handleTimelineElementMove = useCallback(
@@ -148,9 +159,6 @@ export function useTimelineEditing({
       const buildMovePatches: PersistTimelineEditInput["buildPatches"] = (original, target) => {
         return buildTimelineMoveTimingPatch(original, target, updates.start, element.duration);
       };
-      // Server-path fallback (no SDK session): persist the attr patch, then
-      // shift GSAP tween positions on the server. Extending edits can keep the
-      // iframe live unless a GSAP source rewrite needs a fresh run.
       const coalesceKey = `timeline-move:${element.hfId ?? element.id}`;
       const moveFallback = () =>
         enqueueEdit(element, "Move timeline clip", buildMovePatches, coalesceKey).then(() => {
@@ -170,10 +178,6 @@ export function useTimelineEditing({
           });
         });
       const needsExtension = extendRootDurationIfNeeded(updates.start + element.duration);
-      // The z-index reorder above and this timing write target the same file on
-      // separate save queues, and the timing write is a full-file overwrite. Order
-      // it after the reorder so it reads disk with the z-index already applied and
-      // can't clobber it — one ordered writer per gesture (diagonal move+restack).
       return reorderDone.then(() => {
         if (sdkSession && element.hfId && !needsExtension) {
           return sdkTimingPersist(
@@ -239,10 +243,6 @@ export function useTimelineEditing({
       const buildResizePatches: PersistTimelineEditInput["buildPatches"] = (original, target) => {
         return buildTimelineResizeTimingPatch(original, target, element, updates);
       };
-      // SDK path: skip when a playback-start adjustment is needed (setTiming has no pbs field).
-      // The second clause fires because trimming the start of a clip that has a
-      // playback-start attribute implicitly shifts that in-point — which the SDK
-      // setTiming op can't express — so those resizes must take the server path.
       const hasPbsAdjustment =
         updates.playbackStart != null ||
         (updates.start !== element.start && element.playbackStart != null);
@@ -589,5 +589,6 @@ export function useTimelineEditing({
     handleTimelineAssetDrop,
     handleTimelineFileDrop,
     handleBlockedTimelineEdit,
+    ...groupEditing,
   };
 }

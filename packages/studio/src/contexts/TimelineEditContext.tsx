@@ -32,6 +32,8 @@ export function TimelineEditProvider({
     [
       value.onMoveElement,
       value.onResizeElement,
+      value.onMoveElements,
+      value.onResizeElements,
       value.onToggleTrackHidden,
       value.onToggleElementHidden,
       value.onBlockedEditAttempt,

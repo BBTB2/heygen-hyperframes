@@ -312,6 +312,66 @@ export async function persistTimelineEdit(input: PersistTimelineEditInput): Prom
   input.domEditSaveTimestampRef.current = Date.now();
 }
 
+export interface PersistTimelineBatchChange {
+  element: TimelineElement;
+  buildPatches: (original: string, target: PatchTarget) => string;
+}
+
+export interface PersistTimelineBatchEditInput {
+  projectId: string;
+  activeCompPath: string | null;
+  label: string;
+  changes: PersistTimelineBatchChange[];
+  writeProjectFile: (path: string, content: string) => Promise<void>;
+  recordEdit: (input: RecordEditInput) => Promise<void>;
+  domEditSaveTimestampRef: React.MutableRefObject<number>;
+  pendingTimelineEditPathRef: React.MutableRefObject<Set<string>>;
+  coalesceKey?: string;
+}
+
+export async function persistTimelineBatchEdit(
+  input: PersistTimelineBatchEditInput,
+): Promise<void> {
+  const originals = new Map<string, string>();
+  const patchedByPath = new Map<string, string>();
+
+  for (const change of input.changes) {
+    const targetPath = change.element.sourceFile || input.activeCompPath || "index.html";
+    const original =
+      originals.get(targetPath) ?? (await readFileContent(input.projectId, targetPath));
+    originals.set(targetPath, original);
+
+    const patchTarget = buildPatchTarget(change.element);
+    if (!patchTarget) {
+      throw new Error(`Timeline element ${change.element.id} is missing a patchable target`);
+    }
+
+    const current = patchedByPath.get(targetPath) ?? original;
+    const patched = change.buildPatches(current, patchTarget);
+    if (patched === current) {
+      throw new Error(`Unable to patch timeline element ${change.element.id} in ${targetPath}`);
+    }
+    patchedByPath.set(targetPath, patched);
+  }
+
+  const files = Object.fromEntries(patchedByPath);
+  for (const targetPath of Object.keys(files)) {
+    input.pendingTimelineEditPathRef.current.add(targetPath);
+  }
+  input.domEditSaveTimestampRef.current = Date.now();
+  await saveProjectFilesWithHistory({
+    projectId: input.projectId,
+    label: input.label,
+    kind: "timeline",
+    coalesceKey: input.coalesceKey,
+    files,
+    readFile: async (path) => originals.get(path) ?? readFileContent(input.projectId, path),
+    writeFile: input.writeProjectFile,
+    recordEdit: input.recordEdit,
+  });
+  input.domEditSaveTimestampRef.current = Date.now();
+}
+
 export async function readFileContent(projectId: string, targetPath: string): Promise<string> {
   if (targetPath.includes("\0") || targetPath.includes("..")) {
     throw new Error(`Unsafe path: ${targetPath}`);

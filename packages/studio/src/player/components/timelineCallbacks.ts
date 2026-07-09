@@ -2,6 +2,11 @@
 // fallow-ignore-file dead-code
 import type { TimelineElement } from "../store/playerStore";
 import type { BlockedTimelineEditIntent, TimelineStackingReorderIntent } from "./timelineEditing";
+import type {
+  TimelineGroupCommitOptions,
+  TimelineGroupMoveChange,
+  TimelineGroupResizeChange,
+} from "../../hooks/useTimelineGroupEditing";
 
 /**
  * Shared callback signatures for timeline editing operations.
@@ -33,6 +38,14 @@ export interface TimelineEditCallbacks {
   onResizeElement?: (
     element: TimelineElement,
     updates: Pick<TimelineElement, "start" | "duration" | "playbackStart">,
+  ) => Promise<void> | void;
+  onMoveElements?: (
+    changes: TimelineGroupMoveChange[],
+    options?: TimelineGroupCommitOptions,
+  ) => Promise<void> | void;
+  onResizeElements?: (
+    changes: TimelineGroupResizeChange[],
+    options?: TimelineGroupCommitOptions,
   ) => Promise<void> | void;
   onToggleTrackHidden?: (track: number, hidden: boolean) => Promise<void> | void;
   onToggleElementHidden?: (elementKey: string, hidden: boolean) => Promise<void> | void;

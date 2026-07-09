@@ -56,20 +56,23 @@ function timelineElement(input: {
   track: number;
   zIndex: number;
   tag?: string;
+  start?: number;
+  duration?: number;
+  sourceFile?: string;
 }): TimelineElement {
   return {
     id: input.id,
     domId: input.id,
     hfId: `hf-${input.id}`,
     tag: input.tag ?? "div",
-    start: 0,
-    duration: 2,
+    start: input.start ?? 0,
+    duration: input.duration ?? 2,
     track: input.track,
     zIndex: input.zIndex,
     stackingContextId: "root",
     parentCompositionId: null,
     compositionAncestors: ["root"],
-    sourceFile: "index.html",
+    sourceFile: input.sourceFile ?? "index.html",
     timingSource: "authored",
   };
 }
@@ -92,10 +95,14 @@ function renderTimelineEditingHook(input: {
 }): {
   move: ReturnType<typeof useTimelineEditing>["handleTimelineElementMove"];
   resize: ReturnType<typeof useTimelineEditing>["handleTimelineElementResize"];
+  groupMove: ReturnType<typeof useTimelineEditing>["handleTimelineGroupMove"];
+  groupResize: ReturnType<typeof useTimelineEditing>["handleTimelineGroupResize"];
   unmount: () => void;
 } {
   let move: ReturnType<typeof useTimelineEditing>["handleTimelineElementMove"] | null = null;
   let resize: ReturnType<typeof useTimelineEditing>["handleTimelineElementResize"] | null = null;
+  let groupMove: ReturnType<typeof useTimelineEditing>["handleTimelineGroupMove"] | null = null;
+  let groupResize: ReturnType<typeof useTimelineEditing>["handleTimelineGroupResize"] | null = null;
 
   function Harness() {
     const commitRef = useRef(input.onZIndexCommit);
@@ -118,6 +125,8 @@ function renderTimelineEditingHook(input: {
     });
     move = hook.handleTimelineElementMove;
     resize = hook.handleTimelineElementResize;
+    groupMove = hook.handleTimelineGroupMove;
+    groupResize = hook.handleTimelineGroupResize;
     return null;
   }
 
@@ -130,14 +139,22 @@ function renderTimelineEditingHook(input: {
 
   if (!move) throw new Error("Expected hook to expose move handler");
   if (!resize) throw new Error("Expected hook to expose resize handler");
+  if (!groupMove) throw new Error("Expected hook to expose group move handler");
+  if (!groupResize) throw new Error("Expected hook to expose group resize handler");
   return {
     move,
     resize,
+    groupMove,
+    groupResize,
     unmount: () => {
       act(() => root.unmount());
     },
   };
 }
+
+type TimelineRecordEdit = NonNullable<
+  Parameters<typeof renderTimelineEditingHook>[0]["recordEdit"]
+>;
 
 function renderTimelineEditingHookWithLifecycle(input: {
   timelineElements: TimelineElement[];
@@ -228,7 +245,7 @@ describe("useTimelineEditing timeline z-index reorder", () => {
     const sdkSession = await openComposition(source);
     const setTimingSpy = vi.spyOn(sdkSession, "setTiming");
     const writeProjectFile = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
-    const recordEdit = vi.fn(async () => {});
+    const recordEdit = vi.fn<TimelineRecordEdit>(async () => {});
     const forceReloadSdkSession = vi.fn();
     const reloadPreview = vi.fn();
     const iframeWindow = iframe.contentWindow;
@@ -294,7 +311,7 @@ describe("useTimelineEditing timeline z-index reorder", () => {
     const sdkSession = await openComposition(source);
     const setTimingSpy = vi.spyOn(sdkSession, "setTiming");
     const writeProjectFile = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
-    const recordEdit = vi.fn(async () => {});
+    const recordEdit = vi.fn<TimelineRecordEdit>(async () => {});
     const forceReloadSdkSession = vi.fn();
     const reloadPreview = vi.fn();
     const iframeWindow = iframe.contentWindow;
@@ -628,7 +645,7 @@ describe("useTimelineEditing timeline z-index reorder", () => {
     const clip = timelineElement({ id: "clip", track: 0, zIndex: 0 });
     const commit = vi.fn<(entries: ZIndexEntry[]) => Promise<void>>().mockResolvedValue(undefined);
     const writeProjectFile = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
-    const recordEdit = vi.fn(async () => {});
+    const recordEdit = vi.fn<TimelineRecordEdit>(async (_entry) => {});
     const reloadPreview = vi.fn();
     const fetchMock = vi.fn(
       async (
@@ -738,5 +755,209 @@ describe("useTimelineEditing timeline z-index reorder", () => {
     expect(writeProjectFile).toHaveBeenCalled();
 
     unmount();
+  });
+
+  it("persists a same-file group move with one write containing every clip timing", async () => {
+    const source = [
+      '<div id="a" data-start="0" data-duration="1"></div>',
+      '<div id="b" data-start="1" data-duration="1"></div>',
+      '<div id="c" data-start="2" data-duration="1"></div>',
+    ].join("\n");
+    const iframe = createPreviewIframe([
+      { id: "a", track: 0 },
+      { id: "b", track: 1 },
+      { id: "c", track: 2 },
+    ]);
+    const clips = [
+      timelineElement({ id: "a", track: 0, zIndex: 0, start: 0, duration: 1 }),
+      timelineElement({ id: "b", track: 1, zIndex: 0, start: 1, duration: 1 }),
+      timelineElement({ id: "c", track: 2, zIndex: 0, start: 2, duration: 1 }),
+    ];
+    const writeProjectFile = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
+    const recordEdit = vi.fn<TimelineRecordEdit>(async (_entry) => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: Parameters<typeof fetch>[0]): Promise<Response> => {
+        const url = requestUrl(input);
+        if (url.includes("/api/projects/p1/files/")) return jsonResponse({ content: source });
+        if (url.includes("/api/projects/p1/gsap-mutations/")) return jsonResponse({ ok: true });
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+    const { groupMove, unmount } = renderTimelineEditingHook({
+      timelineElements: clips,
+      iframe,
+      onZIndexCommit: vi.fn().mockResolvedValue(undefined),
+      projectId: "p1",
+      writeProjectFile,
+      recordEdit,
+    });
+
+    await act(async () => {
+      await groupMove([
+        { element: clips[0], start: 0.5 },
+        { element: clips[1], start: 1.5 },
+        { element: clips[2], start: 2.5 },
+      ]);
+    });
+
+    expect(writeProjectFile).toHaveBeenCalledTimes(1);
+    const written = writeProjectFile.mock.calls[0]![1] as string;
+    expect(written).toContain('id="a" data-start="0.5"');
+    expect(written).toContain('id="b" data-start="1.5"');
+    expect(written).toContain('id="c" data-start="2.5"');
+    expect(recordEdit).toHaveBeenCalledTimes(1);
+    expect(Object.keys(recordEdit.mock.calls[0]![0].files)).toEqual(["index.html"]);
+
+    unmount();
+  });
+
+  it("partitions a group move by source file while keeping one undo entry", async () => {
+    const files: Record<string, string> = {
+      "index.html": '<div id="a" data-start="0" data-duration="1"></div>',
+      "scene.html": '<div id="b" data-start="1" data-duration="1"></div>',
+    };
+    const iframe = createPreviewIframe([
+      { id: "a", track: 0 },
+      { id: "b", track: 1 },
+    ]);
+    const a = timelineElement({ id: "a", track: 0, zIndex: 0, start: 0, duration: 1 });
+    const b = timelineElement({
+      id: "b",
+      track: 1,
+      zIndex: 0,
+      start: 1,
+      duration: 1,
+      sourceFile: "scene.html",
+    });
+    const writeProjectFile = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
+    const recordEdit = vi.fn<TimelineRecordEdit>(async (_entry) => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: Parameters<typeof fetch>[0]): Promise<Response> => {
+        const url = requestUrl(input);
+        if (url.includes("/api/projects/p1/files/")) {
+          const path = decodeURIComponent(url.split("/files/")[1] ?? "index.html");
+          return jsonResponse({ content: files[path] });
+        }
+        if (url.includes("/api/projects/p1/gsap-mutations/")) return jsonResponse({ ok: true });
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+    const { groupMove, unmount } = renderTimelineEditingHook({
+      timelineElements: [a, b],
+      iframe,
+      onZIndexCommit: vi.fn().mockResolvedValue(undefined),
+      projectId: "p1",
+      writeProjectFile,
+      recordEdit,
+    });
+
+    await act(async () => {
+      await groupMove([
+        { element: a, start: 0.25 },
+        { element: b, start: 1.25 },
+      ]);
+    });
+
+    expect(writeProjectFile.mock.calls.map((call) => call[0])).toEqual([
+      "index.html",
+      "scene.html",
+    ]);
+    expect(writeProjectFile.mock.calls[0]![1]).toContain('data-start="0.25"');
+    expect(writeProjectFile.mock.calls[1]![1]).toContain('data-start="1.25"');
+    expect(recordEdit).toHaveBeenCalledTimes(1);
+    expect(Object.keys(recordEdit.mock.calls[0]![0].files).sort()).toEqual([
+      "index.html",
+      "scene.html",
+    ]);
+
+    unmount();
+  });
+
+  it("waits for a z-index commit before the group timing write", async () => {
+    const source = '<div id="clip" data-start="0" data-duration="1"></div>';
+    const iframe = createPreviewIframe([{ id: "clip", track: 0 }]);
+    const clip = timelineElement({ id: "clip", track: 0, zIndex: 0, start: 0, duration: 1 });
+    let releaseCommit!: () => void;
+    const zIndexCommit = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    const writeProjectFile = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: Parameters<typeof fetch>[0]): Promise<Response> => {
+        const url = requestUrl(input);
+        if (url.includes("/api/projects/p1/files/")) return jsonResponse({ content: source });
+        if (url.includes("/api/projects/p1/gsap-mutations/")) return jsonResponse({ ok: true });
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+    const { groupMove, unmount } = renderTimelineEditingHook({
+      timelineElements: [clip],
+      iframe,
+      onZIndexCommit: vi.fn().mockResolvedValue(undefined),
+      projectId: "p1",
+      writeProjectFile,
+      recordEdit: vi.fn(async () => {}),
+    });
+
+    let movePromise!: Promise<unknown>;
+    await act(async () => {
+      movePromise = groupMove([{ element: clip, start: 0.75 }], { beforeTiming: zIndexCommit });
+      await flushAsyncWork();
+    });
+    expect(writeProjectFile).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseCommit();
+      await movePromise;
+      await flushAsyncWork();
+    });
+    expect(writeProjectFile).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  it("matches the single-clip move output when a group move contains one clip", async () => {
+    const source = '<div id="clip" data-start="0" data-duration="1"></div>';
+    const clip = timelineElement({ id: "clip", track: 0, zIndex: 0, start: 0, duration: 1 });
+    const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0]): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.includes("/api/projects/p1/files/")) return jsonResponse({ content: source });
+      if (url.includes("/api/projects/p1/gsap-mutations/")) return jsonResponse({ ok: true });
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const singleWrite = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
+    const single = renderTimelineEditingHook({
+      timelineElements: [clip],
+      iframe: createPreviewIframe([{ id: "clip", track: 0 }]),
+      onZIndexCommit: vi.fn().mockResolvedValue(undefined),
+      projectId: "p1",
+      writeProjectFile: singleWrite,
+      recordEdit: vi.fn(async () => {}),
+    });
+    await act(async () => {
+      await single.move(clip, { start: 0.5, track: clip.track });
+    });
+    single.unmount();
+
+    const groupWrite = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
+    const group = renderTimelineEditingHook({
+      timelineElements: [clip],
+      iframe: createPreviewIframe([{ id: "clip", track: 0 }]),
+      onZIndexCommit: vi.fn().mockResolvedValue(undefined),
+      projectId: "p1",
+      writeProjectFile: groupWrite,
+      recordEdit: vi.fn(async () => {}),
+    });
+    await act(async () => {
+      await group.groupMove([{ element: clip, start: 0.5 }]);
+    });
+
+    expect(groupWrite.mock.calls[0]![1]).toBe(singleWrite.mock.calls[0]![1]);
+    group.unmount();
   });
 });
