@@ -37,7 +37,8 @@ import {
   readCurrentTranslate,
 } from "@hyperframes/core/runtime/position-edits";
 import type { PreviewAdapter, ElementAtPointResult, DraftProps } from "./types.js";
-import type { EditOp } from "../types.js";
+import type { EditOp, Composition } from "../types.js";
+import { applyPatchesToDocument, applyOverrideSet } from "../engine/apply-patches.js";
 
 // ─── Pure resolver (testable without a browser) ───────────────────────────────
 
@@ -511,6 +512,9 @@ class IframePreviewAdapter implements PreviewAdapter {
    */
   private _draftPrevInlineTranslate: string | null = null;
 
+  /** Unsubscribe for the current attachSync subscription, if any. */
+  private _syncDetach: (() => void) | null = null;
+
   constructor(iframe: HTMLIFrameElement, dispatch?: (op: EditOp) => void) {
     this.iframe = iframe;
     this._dispatch = dispatch;
@@ -739,6 +743,31 @@ class IframePreviewAdapter implements PreviewAdapter {
   private _emit(): void {
     const ids = [...this._selection];
     for (const h of this._handlers) h(ids);
+  }
+
+  /**
+   * Mirror `comp`'s edits onto this.iframe.contentDocument. See the
+   * PreviewAdapter interface doc for the full contract.
+   */
+  attachSync(comp: Composition): () => void {
+    this._syncDetach?.();
+
+    const doc = this.iframe.contentDocument;
+    if (doc) {
+      applyOverrideSet({ document: doc, wrapped: false, stamped: "" }, comp.getOverrides());
+    }
+
+    const unsubscribe = comp.on("patch", ({ patches }) => {
+      const liveDoc = this.iframe.contentDocument;
+      if (!liveDoc) return;
+      applyPatchesToDocument(
+        { document: liveDoc, wrapped: false, stamped: "" },
+        patches.filter((p) => p.path !== "/script/gsap"),
+      );
+    });
+
+    this._syncDetach = unsubscribe;
+    return unsubscribe;
   }
 }
 
