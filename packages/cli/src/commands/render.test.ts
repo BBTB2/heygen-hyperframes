@@ -505,12 +505,24 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
     expect(process.env.HF_DE_PARALLEL_ROUTER).toBeUndefined();
   });
 
-  it("persists deParallelRouterTrialFired when the router actually engages on a successful render", async () => {
+  it("does NOT persist the trial as fired on a clean 'routed' success — keeps trying on future renders", async () => {
     configState.config = { telemetryEnabled: true, deParallelRouterTrialFired: false };
     producerState.executeImpl = async (job) => {
       job.perfSummary = {
         resolution: { width: 100, height: 100 },
         drawElement: { parallelRouter: "routed" },
+      };
+    };
+    await renderLocal("/tmp/project", "/tmp/out.mp4", baseOptions);
+    expect(configState.writeConfigCalls).toHaveLength(0);
+  });
+
+  it("persists the trial as fired when the router's own safety net actually reverted", async () => {
+    configState.config = { telemetryEnabled: true, deParallelRouterTrialFired: false };
+    producerState.executeImpl = async (job) => {
+      job.perfSummary = {
+        resolution: { width: 100, height: 100 },
+        drawElement: { parallelRouter: "reverted" },
       };
     };
     await renderLocal("/tmp/project", "/tmp/out.mp4", baseOptions);
@@ -528,11 +540,23 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
     expect(configState.writeConfigCalls).toHaveLength(0);
   });
 
-  it("persists the trial as fired from the failure path when the router engaged before a hard crash", async () => {
+  it("does NOT persist the trial as fired when a render merely 'routed' crashes for an unrelated reason (e.g. cancellation) — not a router failure", async () => {
     configState.config = { telemetryEnabled: true, deParallelRouterTrialFired: false };
     producerState.executeImpl = async (job) => {
       job.errorDetails = { observability: { capture: { deParallelRouter: "routed" } } };
-      throw new Error("worker crashed");
+      throw new Error("render cancelled");
+    };
+    await renderLocal("/tmp/project", "/tmp/out.mp4", { ...baseOptions, throwOnError: true }).catch(
+      () => {},
+    );
+    expect(configState.writeConfigCalls).toHaveLength(0);
+  });
+
+  it("persists the trial as fired from the failure path when the router's safety net reverted but the retry still failed", async () => {
+    configState.config = { telemetryEnabled: true, deParallelRouterTrialFired: false };
+    producerState.executeImpl = async (job) => {
+      job.errorDetails = { observability: { capture: { deParallelRouter: "reverted" } } };
+      throw new Error("worker crashed even after fallback");
     };
     await renderLocal("/tmp/project", "/tmp/out.mp4", { ...baseOptions, throwOnError: true }).catch(
       () => {},

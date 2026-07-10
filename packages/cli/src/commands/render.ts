@@ -1612,14 +1612,17 @@ function createNoopProducerLogger(): ProducerLogger {
 
 /**
  * Enable the DE parallel-router experiment (`HF_DE_PARALLEL_ROUTER`, default
- * off) for this render, one time per install, so we get real-traffic router
- * telemetry (revert rate, verify-db distribution) without requiring anyone
- * to manually set the env var — see `HyperframesConfig.deParallelRouterTrialFired`.
+ * off) for this render, on EVERY eligible render for this install, so we get
+ * real-traffic router telemetry (revert rate, verify-db distribution)
+ * without requiring anyone to manually set the env var — see
+ * `HyperframesConfig.deParallelRouterTrialFired`. Deliberately runs
+ * indefinitely (not just once) to maximize "routed" success-telemetry
+ * volume; see `maybeConsumeDeParallelRouterTrial` for what turns it off.
  * Returns whether this call armed it (so the caller knows to check for
- * consumption afterward) — false if it's already fired once, or the user
- * already set the env var themselves (never override an explicit choice),
- * or telemetry is disabled (no point risking the experimental path if we
- * can't even record the resulting signal).
+ * consumption afterward) — false if it's already failed once for this
+ * install, or the user already set the env var themselves (never override
+ * an explicit choice), or telemetry is disabled (no point risking the
+ * experimental path if we can't even record the resulting signal).
  */
 function maybeEnableDeParallelRouterTrial(quiet: boolean): boolean {
   if (process.env.HF_DE_PARALLEL_ROUTER !== undefined) return false;
@@ -1629,8 +1632,9 @@ function maybeEnableDeParallelRouterTrial(quiet: boolean): boolean {
   if (!quiet) {
     console.log(
       c.dim(
-        "  Trying the experimental parallel drawElement capture path once for this install " +
-          "(opt out: HF_DE_PARALLEL_ROUTER=false)",
+        "  Trying the experimental parallel drawElement capture path for this install " +
+          "(disabled automatically if it ever needs to fall back; opt out anytime: " +
+          "HF_DE_PARALLEL_ROUTER=false)",
       ),
     );
   }
@@ -1638,20 +1642,28 @@ function maybeEnableDeParallelRouterTrial(quiet: boolean): boolean {
 }
 
 /**
- * After a trial-armed render, persist that the experiment actually engaged
- * (routed or reverted — either produces telemetry) so it's never enabled
- * again for this install. Checks both the success path (`perfSummary`) and
- * the failure path (`errorDetails.observability.capture`, mutated in place
- * before a hard failure throws) — a crash while routed still counts as a
- * fired trial. No-ops if the router never actually became eligible for this
- * render (e.g. too few frames): the trial stays available for a future run.
+ * After a trial-armed render, persist that the router's OWN bet actually
+ * failed — its self-verify/generic-failure safety net fired
+ * (`deParallelRouter === "reverted"`) — so it's never enabled again for this
+ * install. A clean "routed" (the render succeeded with no fallback) does
+ * NOT consume the trial — the whole point is to keep trying on every
+ * eligible render until we see one real failure signal, maximizing
+ * successful-routing telemetry volume rather than stopping at the first
+ * data point. Checks both the success path (`perfSummary`) and the failure
+ * path (`errorDetails.observability.capture`, mutated in place before a
+ * hard failure throws) — a render that still failed even after the
+ * fallback retry counts too. A render that crashed for an unrelated reason
+ * while merely "routed" (never reached "reverted" — e.g. cancellation)
+ * does NOT count as a router failure and does not turn the trial off.
+ * No-ops if the router never became eligible for this render (e.g. too few
+ * frames): the trial stays available for a future run either way.
  */
 function maybeConsumeDeParallelRouterTrial(trialArmed: boolean, job: RenderJob): void {
   if (!trialArmed) return;
-  const engaged =
-    job.perfSummary?.drawElement?.parallelRouter ??
-    job.errorDetails?.observability?.capture.deParallelRouter;
-  if (engaged === undefined) return;
+  const failed =
+    job.perfSummary?.drawElement?.parallelRouter === "reverted" ||
+    job.errorDetails?.observability?.capture.deParallelRouter === "reverted";
+  if (!failed) return;
   const config = readConfig();
   config.deParallelRouterTrialFired = true;
   writeConfig(config);

@@ -65,12 +65,14 @@ export interface HyperframesConfig {
   skillsMissingCount?: number;
   /**
    * True once the DE parallel-router experiment ("HF_DE_PARALLEL_ROUTER")
-   * has actually engaged (routed or reverted — either produces telemetry)
-   * on a render from this install. The CLI enables the experiment for free
-   * on renders from a fresh install until this fires once, then never
-   * touches it again — a one-shot trial to get real-traffic router
-   * telemetry without requiring anyone to manually opt in via env var.
-   * See `renderLocal`'s `maybeEnableDeParallelRouterTrial`.
+   * has actually FAILED (its self-verify/generic-failure safety net fired —
+   * "reverted", not merely "routed") on a render from this install. The CLI
+   * enables the experiment for free on EVERY eligible render from a fresh
+   * install — not just once — to maximize real-traffic router telemetry
+   * (mostly successful "routed" outcomes) without requiring anyone to
+   * manually opt in via env var; only a real failure turns it off, and only
+   * for this install going forward. See `renderLocal`'s
+   * `maybeEnableDeParallelRouterTrial`/`maybeConsumeDeParallelRouterTrial`.
    */
   deParallelRouterTrialFired?: boolean;
 }
