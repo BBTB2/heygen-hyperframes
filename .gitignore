@@ -72,7 +72,9 @@ tmp/
 .tmp/
 
 # Generated files
-packages/core/src/generated/
+packages/core/src/generated/*
+!packages/core/src/generated/position-edits-render-inline.ts
+!packages/core/src/generated/position-edits-render-inline.test.ts
 packages/producer/src/services/fontData.generated.ts
 
 # Plan documents (working artifacts, not committed)

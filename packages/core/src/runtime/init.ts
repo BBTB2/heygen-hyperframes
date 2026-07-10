@@ -29,7 +29,7 @@ import { createRuntimeStartTimeResolver } from "./startResolver";
 import { createClipTree } from "./clipTree";
 import { loadExternalCompositions, loadInlineTemplateCompositions } from "./compositionLoader";
 import { applyCaptionOverrides } from "./captionOverrides";
-import { applyPositionEdits } from "./positionEdits";
+import { applyPositionEdits, installPositionEditsSeekReapply } from "./positionEdits";
 import { applyVariableBindings } from "./applyVariableBindings";
 import { createColorGradingRuntime, type RuntimeColorGradingApi } from "./colorGrading";
 import { TransportClock } from "./clock";
@@ -2986,6 +2986,8 @@ export function initSandboxRuntimeModular(): void {
       });
     }
   }
+
+  installPositionEditsSeekReapply(window as Window & typeof globalThis);
 
   // Start the rAF tick loop
   state.transportRafId = window.requestAnimationFrame(transportTick);
