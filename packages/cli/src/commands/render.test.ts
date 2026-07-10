@@ -10,26 +10,30 @@ const producerState = vi.hoisted(() => ({
   executeImpl: async (_job: Record<string, unknown>): Promise<void> => undefined,
 }));
 
-const configState = vi.hoisted(() => ({
-  // Defaults to "trial already fired" so the pre-existing renderLocal tests
-  // below (which predate the DE-parallel-router trial and don't expect
-  // HF_DE_PARALLEL_ROUTER to be touched) keep their exact prior behavior.
-  //
-  // `disk` is the authoritative "file"; `cache` models config.ts's real
-  // process-lifetime cachedConfig. Modeling them SEPARATELY matters: a mock
-  // where readConfig/readConfigFresh both read one live object hides
-  // exactly the class of bug where production code reads the stale cache
-  // when it needed a fresh disk read (review finding).
-  disk: {
-    telemetryEnabled: true,
-    deParallelRouterTrialFired: true,
-  } as Record<string, unknown>,
-  cache: null as Record<string, unknown> | null,
-  writeConfigCalls: [] as Array<Record<string, unknown>>,
-  // Simulate the real writeConfig's silent fs-error swallowing (unwritable
-  // ~/.hyperframes): the next N writes are recorded but never reach `disk`.
-  failWrites: 0,
-}));
+// Defaults to "trial already fired" so the pre-existing renderLocal tests
+// below (which predate the DE-parallel-router trial and don't expect
+// HF_DE_PARALLEL_ROUTER to be touched) keep their exact prior behavior.
+//
+// `disk` is the authoritative "file"; `cache` models config.ts's real
+// process-lifetime cachedConfig. Modeling them SEPARATELY matters: a mock
+// where readConfig/readConfigFresh both read one live object hides exactly
+// the class of bug where production code reads the stale cache when it
+// needed a fresh disk read (review finding). `failWrites` simulates the
+// real writeConfig's silent fs-error swallowing (unwritable ~/.hyperframes):
+// the next N writes are recorded but never reach `disk`.
+const configState = vi.hoisted(
+  (): {
+    disk: Record<string, unknown>;
+    cache: Record<string, unknown> | null;
+    writeConfigCalls: Array<Record<string, unknown>>;
+    failWrites: number;
+  } => ({
+    disk: { telemetryEnabled: true, deParallelRouterTrialFired: true },
+    cache: null,
+    writeConfigCalls: [],
+    failWrites: 0,
+  }),
+);
 
 const trackingState = vi.hoisted(() => ({
   // maybeEnableDeParallelRouterTrial gates on the real shouldTrack(), which
@@ -91,10 +95,11 @@ vi.mock("../telemetry/config.js", () => ({
     configState.writeConfigCalls.push({ ...config });
     if (configState.failWrites > 0) {
       configState.failWrites--;
-      return; // swallowed silently, like the real writeConfig's catch {}
+      return false; // swallowed silently, like the real writeConfig's catch {}
     }
     configState.disk = { ...config };
     configState.cache = { ...config };
+    return true;
   }),
 }));
 

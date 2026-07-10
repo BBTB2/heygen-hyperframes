@@ -1485,7 +1485,7 @@ export async function renderLocal(
   try {
     await producer.executeRenderJob(job, projectDir, outputPath, onProgress);
   } catch (error: unknown) {
-    maybeConsumeDeParallelRouterTrial(deParallelRouterTrialArmed, job);
+    maybeConsumeDeParallelRouterTrial(deParallelRouterTrialArmed, job, options.quiet);
     handleRenderError(
       error,
       options,
@@ -1497,7 +1497,7 @@ export async function renderLocal(
     );
   }
 
-  maybeConsumeDeParallelRouterTrial(deParallelRouterTrialArmed, job);
+  maybeConsumeDeParallelRouterTrial(deParallelRouterTrialArmed, job, options.quiet);
   const elapsed = Date.now() - startTime;
   trackRenderMetrics(job, elapsed, options, false);
   printRenderComplete(
@@ -1741,6 +1741,14 @@ function stopManagingDeParallelRouterTrial(): void {
  */
 function maybeEnableDeParallelRouterTrial(quiet: boolean, disabled: boolean): boolean {
   if (disabled) return false;
+  // The in-process latch alone decides once it's set — short-circuit before
+  // the disk read so post-fired batch rows don't pay a config read + parse +
+  // shared-cache invalidation per row for an answer module state already
+  // knows (review finding).
+  if (deParallelRouterTrialFiredThisProcess) {
+    stopManagingDeParallelRouterTrial();
+    return false;
+  }
   const userSetIt =
     process.env.HF_DE_PARALLEL_ROUTER !== undefined && !deParallelRouterTrialManagedByUs;
   if (userSetIt) return false;
@@ -1795,9 +1803,11 @@ function resolveDeParallelRouterOutcome(job: RenderJob): string | undefined {
  * re-asserting a boolean is idempotent, so retries can't corrupt anything,
  * unlike the render counter (a re-applied increment double-counts the
  * render when our write landed but a later concurrent write raced our
- * verify read — review finding). Returns false when every attempt failed
- * to stick (e.g. `writeConfig` silently swallowing fs errors on an
- * unwritable `~/.hyperframes`).
+ * verify read — review finding). Returns false as soon as `writeConfig`
+ * reports an fs failure (unwritable `~/.hyperframes` — retrying a failed
+ * write is pointless, so the retries are reserved for genuine concurrent
+ * clobbers, where the write landed but a racing writer's stale snapshot
+ * overwrote it — review finding).
  */
 function persistDeParallelRouterTrialFired(): boolean {
   const MAX_ATTEMPTS = 3;
@@ -1805,7 +1815,7 @@ function persistDeParallelRouterTrialFired(): boolean {
     const config = readConfigFresh();
     if (config.deParallelRouterTrialFired) return true;
     config.deParallelRouterTrialFired = true;
-    writeConfig(config);
+    if (!writeConfig(config)) return false;
   }
   return Boolean(readConfigFresh().deParallelRouterTrialFired);
 }
@@ -1838,7 +1848,11 @@ function persistDeParallelRouterTrialFired(): boolean {
  * flag is the safety-critical bit and IS verified/re-asserted — see
  * `persistDeParallelRouterTrialFired`.
  */
-function maybeConsumeDeParallelRouterTrial(trialArmed: boolean, job: RenderJob): void {
+function maybeConsumeDeParallelRouterTrial(
+  trialArmed: boolean,
+  job: RenderJob,
+  quiet: boolean,
+): void {
   if (!trialArmed) return;
   const outcome = resolveDeParallelRouterOutcome(job);
   if (outcome === undefined) return;
@@ -1855,7 +1869,12 @@ function maybeConsumeDeParallelRouterTrial(trialArmed: boolean, job: RenderJob):
     stopManagingDeParallelRouterTrial();
   }
   writeConfig(config);
-  if (fired && !persistDeParallelRouterTrialFired()) {
+  // `!quiet`-gated like every other trial message: quiet/batch-json renders
+  // must produce no unexpected terminal output — CI wrappers asserting
+  // empty stderr would misread the warning as a render failure (review
+  // finding). The in-process latch above already guarantees the safety
+  // behavior the warning describes, whether or not it prints.
+  if (fired && !persistDeParallelRouterTrialFired() && !quiet) {
     console.warn(
       c.warn(
         "  Could not persist the parallel drawElement trial's off-switch to " +

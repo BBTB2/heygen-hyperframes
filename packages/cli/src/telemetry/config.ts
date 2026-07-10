@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -162,15 +162,32 @@ export function readConfigFresh(): HyperframesConfig {
 }
 
 /**
- * Persist config to disk. Updates the in-memory cache.
+ * Persist config to disk. Updates the in-memory cache on success.
+ *
+ * Atomic: writes to a pid-suffixed temp file and renames it over the config —
+ * `rename(2)` within one directory is atomic on POSIX, so a concurrent
+ * reader can never observe a partially-written file. That matters beyond
+ * hygiene: `readConfig`'s corrupted-file catch RESETS the config to defaults
+ * (new anonymousId, telemetry re-enabled, all optional fields wiped), so a
+ * torn read of a non-atomic write would silently destroy the user's config
+ * (review finding).
+ *
+ * Returns whether the write actually landed — errors are still swallowed
+ * (telemetry must never break the CLI), but callers that need persistence
+ * certainty (e.g. the DE parallel-router trial's off-switch) can react
+ * instead of re-implementing read-back verification.
  */
-export function writeConfig(config: HyperframesConfig): void {
+export function writeConfig(config: HyperframesConfig): boolean {
   try {
     mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-    writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+    const tmpFile = `${CONFIG_FILE}.${process.pid}.tmp`;
+    writeFileSync(tmpFile, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+    renameSync(tmpFile, CONFIG_FILE);
     cachedConfig = { ...config };
+    return true;
   } catch {
     // Non-fatal — telemetry should never break the CLI
+    return false;
   }
 }
 

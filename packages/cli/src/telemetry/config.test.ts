@@ -21,6 +21,13 @@ vi.mock("node:fs", () => ({
   writeFileSync: vi.fn((path: string, content: string) => {
     fsState.files.set(path, content);
   }),
+  // writeConfig writes atomically: temp file + rename over the target.
+  renameSync: vi.fn((from: string, to: string) => {
+    const content = fsState.files.get(from);
+    if (content === undefined) throw new Error(`ENOENT: ${from}`);
+    fsState.files.set(to, content);
+    fsState.files.delete(from);
+  }),
 }));
 
 describe("config.ts — readConfig / readConfigFresh / writeConfig (real module, faked fs)", () => {
@@ -92,5 +99,20 @@ describe("config.ts — readConfig / readConfigFresh / writeConfig (real module,
     const config = readConfig();
     expect(config.telemetryEnabled).toBe(true);
     expect(config.anonymousId).toBeTruthy();
+  });
+
+  it("writeConfig reports success, leaves no temp file behind, and reports failure when the fs throws", async () => {
+    const config = readConfig();
+    expect(writeConfig(config)).toBe(true);
+    // Atomic write: the pid-suffixed temp file must have been renamed away.
+    for (const path of fsState.files.keys()) {
+      expect(path.endsWith(".tmp")).toBe(false);
+    }
+
+    const fs = await import("node:fs");
+    vi.mocked(fs.writeFileSync).mockImplementationOnce(() => {
+      throw new Error("EACCES: permission denied");
+    });
+    expect(writeConfig(config)).toBe(false);
   });
 });
