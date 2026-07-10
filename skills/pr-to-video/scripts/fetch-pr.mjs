@@ -86,7 +86,6 @@ const FIELDS = [
   "mergedBy",
   "state",
   "mergedAt",
-  "mergeCommit",
 ].join(",");
 
 const view = ghTry(["pr", "view", prRef, "--json", FIELDS]);

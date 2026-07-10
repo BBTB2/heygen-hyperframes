@@ -54,7 +54,7 @@ export const UA_DEFAULT_COLORS = new Set(
 // 145) and would otherwise win a pure chroma ranking, painting captions/highlights the error red.
 // build-frame.mjs uses this same key set to protect status colors during the preset→brand remix.
 export const STATUS_ROLE_KEY =
-  /(?:^|[-_])(?:positive|negative|success|error|warning|danger|good|bad|up|down)(?:[-_]|$)/i;
+  /(?:^|[-_])(?:positive|negative|success|error|warning|danger|good|bad|up|down|info|neutral|alert|caution|critical)(?:[-_]|$)/i;
 
 // Pick the brand ACCENT — never by raw chroma alone, never a UA-default link color.
 // Priority:

@@ -55,6 +55,7 @@ import { parseStoryboard } from "./lib/storyboard.mjs";
 import { parseFormat } from "./lib/dimensions.mjs";
 import { stageAssets } from "./lib/assets.mjs";
 import { parseColors, semanticColors } from "./lib/tokens.mjs";
+import { bgmDefaultVolume } from "../../media-use/audio/scripts/lib/bgm.mjs";
 
 // ---------- argv ----------
 const argv = process.argv.slice(2);
@@ -388,9 +389,9 @@ if (audio.bgm?.path) {
         `bgm is ${cov.dur?.toFixed?.(1) ?? "?"}s (< ${TOTAL}s) and could not be extended (${cov.reason}) — the tail will be silent; install ffmpeg`,
       );
     }
-    // An explicit volume from audio_meta always wins. Otherwise BGM under
-    // narration is a bed (0.12 ≈ -18 dB); a silent film sits it forward at 0.9.
-    const vol = audio.bgm.volume != null ? audio.bgm.volume : voiceCount > 0 ? 0.12 : 0.9;
+    // An explicit volume from audio_meta always wins; otherwise the shared
+    // media-use default (bed ~ -18 dB under narration, forward for a silent film).
+    const vol = audio.bgm.volume != null ? audio.bgm.volume : bgmDefaultVolume(voiceCount > 0);
     body.push(
       `      <!-- BGM -->`,
       `      <audio`,
