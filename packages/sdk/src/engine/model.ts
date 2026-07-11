@@ -6,7 +6,11 @@
  */
 
 import { parseHTML } from "linkedom";
-import { ensureHfIds, isCompositionTemplate } from "@hyperframes/core/hf-ids";
+import {
+  ensureHfIds,
+  isCompositionTemplate,
+  walkCompositionDescendants,
+} from "@hyperframes/core/hf-ids";
 
 export interface ParsedDocument {
   document: Document;
@@ -374,38 +378,26 @@ export function setStyleSheet(document: Document, css: string): void {
 
 function findScriptElementsDeep(document: Document): Element[] {
   const scripts: Element[] = [];
-  const walk = (parent: Element): void => {
-    for (const child of Array.from(parent.children)) {
-      const tag = child.tagName.toLowerCase();
-      if (tag === "script") {
-        scripts.push(child);
-        continue;
-      }
-      if (tag === "template") {
-        if (isCompositionTemplate(child)) walk(child);
-        continue;
-      }
-      walk(child);
-    }
-  };
-  if (document.documentElement) walk(document.documentElement);
+  walkCompositionDescendants(document, (child) => {
+    if (child.tagName.toLowerCase() === "script") scripts.push(child);
+  });
   return scripts;
+}
+
+function isGsapScriptText(text: string): boolean {
+  return text.includes("gsap") || text.includes("__timelines") || text.includes("ScrollTrigger");
 }
 
 export function getGsapScripts(document: Document): string[] {
   return findScriptElementsDeep(document)
     .map((script) => script.textContent ?? "")
-    .filter(
-      (text) =>
-        text.includes("gsap") || text.includes("__timelines") || text.includes("ScrollTrigger"),
-    );
+    .filter(isGsapScriptText);
 }
 
 function findGsapScriptElement(document: Document): Element | null {
   for (const script of findScriptElementsDeep(document)) {
     const text = script.textContent ?? "";
-    if (text.includes("gsap") || text.includes("__timelines") || text.includes("ScrollTrigger"))
-      return script as unknown as Element;
+    if (isGsapScriptText(text)) return script;
   }
   return null;
 }

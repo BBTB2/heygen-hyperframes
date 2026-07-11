@@ -70,23 +70,34 @@ function buildAnimationIdMap(document: Document): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const script of getGsapScripts(document)) {
     for (const { id, selector } of parseLocatedCached(script)) {
-      if (!selector) continue;
-      let matches: Element[] = [];
-      try {
-        matches = querySelectorAllDeep(document, selector);
-      } catch {
-        continue; // selector not valid for querySelectorAll — skip
-      }
-      for (const el of matches) {
-        const hfId = el.getAttribute("data-hf-id");
-        if (!hfId) continue;
-        const list = map.get(hfId);
-        if (list) list.push(id);
-        else map.set(hfId, [id]);
-      }
+      appendAnimationIdsForSelector(map, document, id, selector);
     }
   }
   return map;
+}
+
+function appendAnimationIdsForSelector(
+  map: Map<string, string[]>,
+  document: Document,
+  animationId: string,
+  selector: string,
+): void {
+  if (!selector) return;
+
+  let matches: Element[];
+  try {
+    matches = querySelectorAllDeep(document, selector);
+  } catch {
+    return; // selector not valid for querySelectorAll — skip
+  }
+
+  for (const el of matches) {
+    const hfId = el.getAttribute("data-hf-id");
+    if (!hfId) continue;
+    const list = map.get(hfId);
+    if (list) list.push(animationId);
+    else map.set(hfId, [animationId]);
+  }
 }
 
 /**
