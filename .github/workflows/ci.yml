@@ -372,6 +372,9 @@ jobs:
           node-version: 22
       - uses: ./.github/actions/prepare-ffmpeg-bin
       - run: bun install --frozen-lockfile
+      # Runtime coverage now imports core modules that consume workspace
+      # subpaths. Build their dist exports before Vitest resolves them.
+      - run: bun run --filter '@hyperframes/{parsers,lint,studio-server}' build
       - run: bun run --filter @hyperframes/core test:hyperframe-runtime-ci
 
   studio-load-smoke:
