@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { resolveConfig, DEFAULT_CONFIG, scaleProtocolTimeoutForComposition } from "./config.js";
+import {
+  resolveConfig,
+  DEFAULT_CONFIG,
+  scaleProtocolTimeoutForComposition,
+  shouldClampToScreenshotForConcreteGpu,
+} from "./config.js";
 import { isLowMemorySystem } from "./services/systemMemory.js";
 
 describe("resolveConfig", () => {
@@ -336,6 +341,59 @@ describe("resolveConfig", () => {
       setEnv("PRODUCER_BROWSER_GPU_MODE", "hardware");
       const config = resolveConfig({ forceScreenshot: true });
       expect(config.forceScreenshot).toBe(true);
+    });
+
+    it("documents the auto-branch gap: resolveConfig leaves auto→software as forceScreenshot=false", () => {
+      // resolveConfig's clamp keys on the string `browserGpuMode`; `"auto"`
+      // that runtime-probes to software is invisible to this layer. The
+      // runtime companion `shouldClampToScreenshotForConcreteGpu` (below)
+      // closes the gap at the frameCapture + renderOrchestrator sites.
+      setEnv("PRODUCER_BROWSER_GPU_MODE", "auto");
+      unsetEnv("PRODUCER_FORCE_SCREENSHOT");
+      const config = resolveConfig();
+      expect(config.browserGpuMode).toBe("auto");
+      expect(config.forceScreenshot).toBe(false);
+    });
+  });
+
+  describe("shouldClampToScreenshotForConcreteGpu (runtime companion for auto→software)", () => {
+    it("returns true when resolved GPU is software AND forceScreenshot is currently false", () => {
+      // Env explicitly cleared so PRODUCER_FORCE_SCREENSHOT="false" opt-out
+      // doesn't fire.
+      expect(
+        shouldClampToScreenshotForConcreteGpu("software", false, {} as NodeJS.ProcessEnv),
+      ).toBe(true);
+    });
+
+    it("returns false when resolved GPU is hardware (no clamp needed)", () => {
+      expect(
+        shouldClampToScreenshotForConcreteGpu("hardware", false, {} as NodeJS.ProcessEnv),
+      ).toBe(false);
+    });
+
+    it("returns false when forceScreenshot is already true (invariant already satisfied)", () => {
+      expect(shouldClampToScreenshotForConcreteGpu("software", true, {} as NodeJS.ProcessEnv)).toBe(
+        false,
+      );
+    });
+
+    it("honors PRODUCER_FORCE_SCREENSHOT=false env opt-out on software", () => {
+      // BeginFrame-on-software debugging escape hatch.
+      expect(
+        shouldClampToScreenshotForConcreteGpu("software", false, {
+          PRODUCER_FORCE_SCREENSHOT: "false",
+        } as NodeJS.ProcessEnv),
+      ).toBe(false);
+    });
+
+    it("does NOT treat other PRODUCER_FORCE_SCREENSHOT values as opt-out", () => {
+      // Only literal "false" opts out; "true", "0", missing, anything else clamps.
+      for (const value of [undefined, "true", "1", "0", "no", ""]) {
+        const env = (
+          value === undefined ? {} : { PRODUCER_FORCE_SCREENSHOT: value }
+        ) as NodeJS.ProcessEnv;
+        expect(shouldClampToScreenshotForConcreteGpu("software", false, env)).toBe(true);
+      }
     });
   });
 

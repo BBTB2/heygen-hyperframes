@@ -70,6 +70,7 @@ import {
   type SubTimelineWaitOutcome,
   resolveBrowserGpuMode,
   resolveHeadlessShellPath,
+  shouldClampToScreenshotForConcreteGpu,
   scaleProtocolTimeoutForComposition,
   isMemoryExhaustionError,
   isTransientBrowserError,
@@ -1908,7 +1909,23 @@ export async function executeRenderJob(
       chromePath: resolveHeadlessShellPath(cfg),
       browserTimeout: cfg.browserTimeout,
     });
-    updateCaptureObservability({ browserGpuMode: resolvedBrowserGpuMode });
+    // Mirror the frameCapture.ts routing invariant here so observability
+    // reports the actual capture mode on `browserGpuMode: "auto"` renders
+    // that probe to software: `resolveConfig` couldn't see this at config
+    // time, so `captureObservability.forceScreenshot` was still false,
+    // misreporting `captureMode: "beginframe"` for a session that will
+    // actually take the screenshot path. Env-level opt-out preserved via
+    // the shared helper.
+    const observabilityForceScreenshot =
+      captureObservability.forceScreenshot ||
+      shouldClampToScreenshotForConcreteGpu(
+        resolvedBrowserGpuMode,
+        captureObservability.forceScreenshot,
+      );
+    updateCaptureObservability({
+      browserGpuMode: resolvedBrowserGpuMode,
+      forceScreenshot: observabilityForceScreenshot,
+    });
     const videoCaptureBeyondViewport = resolveVideoCaptureBeyondViewport(composition.videos.length);
 
     const captureOptions: CaptureOptions = {

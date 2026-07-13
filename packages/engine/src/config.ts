@@ -610,3 +610,28 @@ export function resolveConfig(overrides?: Partial<EngineConfig>): EngineConfig {
     vp9CpuUsed: normalizeVp9CpuUsed(merged.vp9CpuUsed),
   };
 }
+
+/**
+ * Runtime-resolved companion to the software-GPU screenshot clamp in
+ * `resolveConfig`. Returns `true` iff callers should treat this render as
+ * `forceScreenshot=true` even though the config's stored `forceScreenshot`
+ * is `false`. Fires when the concrete resolved GPU is software AND the
+ * env-level opt-out (`PRODUCER_FORCE_SCREENSHOT=false`) is NOT set.
+ *
+ * `resolveConfig`'s clamp only sees `browserGpuMode` as a string, so
+ * `"auto"` that runtime-probes to software slips through. This helper
+ * closes that gap at the concrete-resolution points (`frameCapture` and
+ * `renderOrchestrator`). Same invariant, same env opt-out, one predicate.
+ *
+ * Callers should skip when the invariant is already satisfied
+ * (`currentForceScreenshot === true`) to avoid redundant work.
+ */
+export function shouldClampToScreenshotForConcreteGpu(
+  resolvedGpuMode: "software" | "hardware",
+  currentForceScreenshot: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (currentForceScreenshot) return false;
+  if (resolvedGpuMode !== "software") return false;
+  return env["PRODUCER_FORCE_SCREENSHOT"] !== "false";
+}

@@ -43,7 +43,11 @@ import {
   produceDrawElementFrameBatch,
 } from "./drawElementService.js";
 import { initThreeDProjection, detectCssEffectRisk } from "./threeDProjection.js";
-import { DEFAULT_CONFIG, type EngineConfig } from "../config.js";
+import {
+  DEFAULT_CONFIG,
+  shouldClampToScreenshotForConcreteGpu,
+  type EngineConfig,
+} from "../config.js";
 import type {
   CaptureOptions,
   CaptureVideoMetadataHint,
@@ -812,15 +816,26 @@ export async function createCaptureSession(
   // need explicit clip+scale on `Page.captureScreenshot`, so fall back to
   // the screenshot path for any DPR > 1.
   const supersampling = (options.deviceScaleFactor ?? 1) > 1;
-  const preMode: CaptureMode =
-    headlessShell && isLinux && !forceScreenshot && !supersampling && !drawElementTransparent
-      ? "beginframe"
-      : "screenshot";
   const requestedGpuMode = config?.browserGpuMode ?? DEFAULT_CONFIG.browserGpuMode;
   const resolvedGpuMode = await resolveBrowserGpuMode(requestedGpuMode, {
     chromePath: headlessShell ?? undefined,
     browserTimeout: config?.browserTimeout,
   });
+  // Apply the software-GPU→screenshot invariant at the concrete-resolved
+  // point too — `resolveConfig` can only see the pre-resolve `browserGpuMode`
+  // string, so `"auto"` that probes to software would otherwise slip through
+  // and launch BeginFrame + SwiftShader (the exact combination the invariant
+  // is meant to prevent). Env-level opt-out preserved via the shared helper.
+  const effectiveForceScreenshot =
+    forceScreenshot || shouldClampToScreenshotForConcreteGpu(resolvedGpuMode, forceScreenshot);
+  const preMode: CaptureMode =
+    headlessShell &&
+    isLinux &&
+    !effectiveForceScreenshot &&
+    !supersampling &&
+    !drawElementTransparent
+      ? "beginframe"
+      : "screenshot";
   const chromeArgs = buildChromeArgs(
     { width: options.width, height: options.height, captureMode: preMode },
     { ...config, browserGpuMode: resolvedGpuMode },
