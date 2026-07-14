@@ -33,10 +33,10 @@ const ALIGN_OPTIONS = [
 ];
 
 const CASE_OPTIONS = [
-  { key: "none", node: "–" },
-  { key: "uppercase", node: "AG" },
-  { key: "lowercase", node: "ag" },
-  { key: "capitalize", node: "Ag" },
+  { key: "none", label: "none", node: "–" },
+  { key: "uppercase", label: "uppercase", node: "AG" },
+  { key: "lowercase", label: "lowercase", node: "ag" },
+  { key: "capitalize", label: "capitalize", node: "Ag" },
 ];
 
 function FlatTextFieldEditor({
@@ -167,12 +167,23 @@ function FlatTextFieldEditor({
         options={ALIGN_OPTIONS.map((option) => ({
           key: option.key,
           node: option.node,
+          label: option.label,
           active:
             align === option.key ||
             (option.key === "left" && align === "start") ||
             (option.key === "right" && align === "end"),
         }))}
-        onChange={(next) => onSetTextFieldStyle(field.key, "text-align", next)}
+        onChange={(next) => {
+          // Re-clicking the option that's already visually active for a
+          // logical value (authored "start"/"end") must not rewrite it to
+          // the physical "left"/"right" — that destroys the logical
+          // semantics and is wrong for RTL content. Only write when the
+          // user actually picked a different alignment.
+          if ((next === "left" && align === "start") || (next === "right" && align === "end")) {
+            return;
+          }
+          onSetTextFieldStyle(field.key, "text-align", next);
+        }}
       />
       <FlatSegmentedRow
         label="Case · Style"
@@ -180,10 +191,11 @@ function FlatTextFieldEditor({
           ...CASE_OPTIONS.map((option) => ({
             key: option.key,
             node: option.node,
+            label: option.label,
             active: textTransform === option.key,
           })),
-          { key: "normal", node: "A", active: fontStyle === "normal" },
-          { key: "italic", node: "A", active: fontStyle === "italic" },
+          { key: "normal", node: "A", label: "upright", active: fontStyle === "normal" },
+          { key: "italic", node: "A", label: "italic", active: fontStyle === "italic" },
         ]}
         spacerAfterIndex={2}
         onChange={(next) => {

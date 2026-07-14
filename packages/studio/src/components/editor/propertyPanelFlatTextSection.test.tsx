@@ -210,7 +210,7 @@ describe("FlatTextFieldEditor controls", () => {
     act(() => root.unmount());
   });
 
-  it("lights up 'right' for text-align: end and commits the concrete 'right' value on click", () => {
+  it("lights up 'right' for text-align: end but re-clicking it is a no-op — preserves the logical value", () => {
     const onSetTextFieldStyle = vi.fn();
     const { host, root } = renderInto(
       <FlatTextSection
@@ -227,8 +227,32 @@ describe("FlatTextFieldEditor controls", () => {
     const rightButton = alignButtons.find((button) => button.textContent === "R");
     expect(rightButton).not.toBeUndefined();
     expect(rightButton?.className).toContain("border-panel-accent");
+    // Clicking the option that's already visually active for "end" must NOT
+    // rewrite it to the physical "right" — that would destroy the logical
+    // semantics and break RTL content, where "end" and "right" differ.
     act(() => rightButton?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect(onSetTextFieldStyle).toHaveBeenCalledWith("a", "text-align", "right");
+    expect(onSetTextFieldStyle).not.toHaveBeenCalled();
+    act(() => root.unmount());
+  });
+
+  it("commits a genuine align change away from a logical value", () => {
+    const onSetTextFieldStyle = vi.fn();
+    const { host, root } = renderInto(
+      <FlatTextSection
+        element={makeSingleFieldElement({ computedStyles: { "text-align": "end" } })}
+        styles={{}}
+        fontAssets={[]}
+        onSetText={vi.fn()}
+        onSetTextFieldStyle={onSetTextFieldStyle}
+        onAddTextField={vi.fn()}
+        onRemoveTextField={vi.fn()}
+      />,
+    );
+    const alignButtons = segmentedRowButtons(host, "Align");
+    const centerButton = alignButtons.find((button) => button.textContent === "C");
+    expect(centerButton).not.toBeUndefined();
+    act(() => centerButton?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onSetTextFieldStyle).toHaveBeenCalledWith("a", "text-align", "center");
     act(() => root.unmount());
   });
 

@@ -516,7 +516,7 @@ export function PropertyPanelFlat({
         onUngroup={onUngroup}
         showUngroup={Boolean(onUngroup && element.dataAttributes["hf-group"] != null)}
       />
-      <div data-flat-panel-body="true" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div data-flat-panel-body="true" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {beforeOpen.map((g) => (
           <FlatGroupHeader
             key={g.id}

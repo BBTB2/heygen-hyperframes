@@ -53,35 +53,48 @@ function makeElement(overrides: Partial<DomEditSelection> = {}): DomEditSelectio
 function HookHost({
   onState,
   onSetAttributeLive,
+  element,
 }: {
   onState: (state: ReturnType<typeof useColorGradingController>) => void;
   onSetAttributeLive: (attr: string, value: string | null) => void;
+  element: DomEditSelection;
 }) {
   const state = useColorGradingController({
     projectId: "proj",
-    element: makeElement(),
+    element,
     onSetAttributeLive,
   });
   onState(state);
   return null;
 }
 
-function renderHook(onSetAttributeLive: (attr: string, value: string | null) => void) {
+function renderHook(
+  onSetAttributeLive: (attr: string, value: string | null) => void,
+  initialElement: DomEditSelection = makeElement(),
+) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   let latest: ReturnType<typeof useColorGradingController> | undefined;
-  act(() => {
-    root.render(
-      React.createElement(HookHost, {
-        onState: (s: ReturnType<typeof useColorGradingController>) => (latest = s),
-        onSetAttributeLive,
-      }),
-    );
-  });
+  const renderWith = (element: DomEditSelection) => {
+    act(() => {
+      root.render(
+        React.createElement(HookHost, {
+          onState: (s: ReturnType<typeof useColorGradingController>) => (latest = s),
+          onSetAttributeLive,
+          element,
+        }),
+      );
+    });
+  };
+  renderWith(initialElement);
   return {
     root,
-    get state() {
+    rerenderWithElement: renderWith,
+    // A method, not a getter — `const { state } = renderHook(...)` would
+    // destructure a getter into a one-time snapshot, silently going stale
+    // after the first state change. Call `.getState()` fresh every time.
+    getState(): ReturnType<typeof useColorGradingController> {
       if (!latest) throw new Error("hook did not render");
       return latest;
     },
@@ -90,19 +103,20 @@ function renderHook(onSetAttributeLive: (attr: string, value: string | null) => 
 
 describe("useColorGradingController", () => {
   it("starts with the neutral (inactive) grading and idle compare state", () => {
-    const { root, state } = renderHook(vi.fn());
-    expect(state.grading.preset).toBe("neutral");
-    expect(state.compareEnabled).toBe(false);
+    const { root, getState } = renderHook(vi.fn());
+    expect(getState().grading.preset).toBe("neutral");
+    expect(getState().compareEnabled).toBe(false);
     act(() => root.unmount());
   });
 
   it("commitColorGrading updates grading state synchronously and schedules a debounced persist", async () => {
     vi.useFakeTimers();
     const onSetAttributeLive = vi.fn();
-    const { root, state } = renderHook(onSetAttributeLive);
+    const { root, getState } = renderHook(onSetAttributeLive);
     act(() => {
-      state.commitColorGrading(freshPopGrading());
+      getState().commitColorGrading(freshPopGrading());
     });
+    expect(getState().grading.preset).toBe("fresh-pop");
     expect(onSetAttributeLive).not.toHaveBeenCalled();
     act(() => {
       vi.advanceTimersByTime(400);
@@ -116,14 +130,95 @@ describe("useColorGradingController", () => {
   });
 
   it("resetGrading returns to the neutral preset", () => {
-    const { root, state } = renderHook(vi.fn());
+    const { root, getState } = renderHook(vi.fn());
     act(() => {
-      state.commitColorGrading(freshPopGrading());
+      getState().commitColorGrading(freshPopGrading());
     });
     act(() => {
-      state.resetGrading();
+      getState().resetGrading();
     });
-    expect(state.grading.preset).toBe("neutral");
+    expect(getState().grading.preset).toBe("neutral");
     act(() => root.unmount());
+  });
+
+  it("resets grading/compare state when selection changes to a different element", () => {
+    const { root, getState, rerenderWithElement } = renderHook(
+      vi.fn(),
+      makeElement({ id: "s1-bg" }),
+    );
+    act(() => {
+      getState().commitColorGrading(freshPopGrading());
+    });
+    expect(getState().grading.preset).toBe("fresh-pop");
+    // A different element, with no persisted grading of its own — without a
+    // reset, this hook (unlike the legacy component it was extracted from,
+    // which remounts via a `key={selectionIdentityKey}`) would keep showing
+    // the previous element's grading.
+    rerenderWithElement(makeElement({ id: "s2-bg" }));
+    expect(getState().grading.preset).toBe("neutral");
+    act(() => root.unmount());
+  });
+
+  it("cancels a pending persist scheduled for the previous element when selection changes before it flushes", () => {
+    vi.useFakeTimers();
+    const onSetAttributeLive = vi.fn();
+    const { root, getState, rerenderWithElement } = renderHook(
+      onSetAttributeLive,
+      makeElement({ id: "s1-bg" }),
+    );
+    act(() => {
+      getState().commitColorGrading(freshPopGrading());
+    });
+    // Switch selection before the 350ms debounce flushes — the queued write
+    // targeted the OLD element and must not land on whatever is selected now.
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    rerenderWithElement(makeElement({ id: "s2-bg" }));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(onSetAttributeLive).not.toHaveBeenCalled();
+    act(() => root.unmount());
+    vi.useRealTimers();
+  });
+
+  it("does not permanently cache a non-OK media/metadata response — the next mount retries", async () => {
+    const videoWithSrc = () => {
+      const el = document.createElement("video");
+      el.setAttribute("src", "clip.mp4");
+      return el;
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({ metadata: { kind: "video", color: { dynamicRange: "hdr" } } }),
+      } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = renderHook(vi.fn(), makeElement({ id: "retry-asset", element: videoWithSrc() }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(first.getState().mediaMetadata).toBeNull();
+    act(() => first.root.unmount());
+
+    // A second, independent mount for the SAME asset path — if the failed
+    // response had been cached, this would never re-fetch and mediaMetadata
+    // would stay null forever.
+    const second = renderHook(
+      vi.fn(),
+      makeElement({ id: "retry-asset-2", element: videoWithSrc() }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(second.getState().mediaMetadata?.color.dynamicRange).toBe("hdr");
+    act(() => second.root.unmount());
+    vi.unstubAllGlobals();
   });
 });

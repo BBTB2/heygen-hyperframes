@@ -11,24 +11,19 @@ import {
 import {
   buildBoxShadowPresetValue,
   buildClipPathValue,
-  buildInsetClipPathSides,
-  buildInsetClipPathValue,
   buildStrokeStyleUpdates,
   buildStrokeWidthStyleUpdates,
   extractBackgroundImageUrl,
   formatNumericValue,
   formatPxMetricValue,
-  getClipPathInsetPx,
   getCssFilterFunctionPx,
   inferBoxShadowPreset,
   inferClipPathPreset,
   normalizePanelPxValue,
-  parseInsetClipPathSides,
   parseNumericValue,
   parsePxMetricValue,
   setCssFilterFunctionPx,
   type BoxShadowPreset,
-  type ClipPathInsetSides,
 } from "./propertyPanelHelpers";
 import {
   FlatRow,
@@ -36,7 +31,7 @@ import {
   FlatSelectRow,
   FlatSlider,
 } from "./propertyPanelFlatPrimitives";
-import { MetricField } from "./propertyPanelPrimitives";
+import { FlatMaskInsetRows } from "./propertyPanelFlatMaskInsetRows";
 import { resolveValueTier } from "./propertyPanelValueTier";
 import { ColorField } from "./propertyPanelColor";
 import { GradientField, ImageFillField } from "./propertyPanelFill";
@@ -96,9 +91,14 @@ function FlatFillFields({
       <FlatSegmentedRow
         label="Fill"
         options={[
-          { key: "Solid", node: "Solid", active: preferredFillMode === "Solid" },
-          { key: "Gradient", node: "Gradient", active: preferredFillMode === "Gradient" },
-          { key: "Image", node: "Image", active: preferredFillMode === "Image" },
+          { key: "Solid", node: "Solid", label: "Solid", active: preferredFillMode === "Solid" },
+          {
+            key: "Gradient",
+            node: "Gradient",
+            label: "Gradient",
+            active: preferredFillMode === "Gradient",
+          },
+          { key: "Image", node: "Image", label: "Image", active: preferredFillMode === "Image" },
         ]}
         disabled={styleEditingDisabled}
         onChange={handleFillModeChange}
@@ -431,90 +431,6 @@ function FlatOverflowMaskRows({
         disabled={disabled}
         onSetStyle={onSetStyle}
       />
-    </>
-  );
-}
-
-// Flat Mask inset — uniform slider + per-side fields.
-function FlatMaskInsetRows({
-  clipPathValue,
-  radiusValue,
-  disabled,
-  onSetStyle,
-}: {
-  clipPathValue: string;
-  radiusValue: number;
-  disabled: boolean;
-  onSetStyle: (prop: string, value: string) => void | Promise<void>;
-}) {
-  const clipPathPreset = inferClipPathPreset(clipPathValue);
-  const parsedClipInsets = parseInsetClipPathSides(clipPathValue);
-  const clipInsetValue = getClipPathInsetPx(clipPathValue);
-  const clipInsetSides = parsedClipInsets ?? {
-    top: clipInsetValue,
-    right: clipInsetValue,
-    bottom: clipInsetValue,
-    left: clipInsetValue,
-    radius: radiusValue,
-  };
-  const showClipInsetSides = clipPathPreset === "inset" || parsedClipInsets != null;
-
-  const commitClipInsetSide = (side: keyof ClipPathInsetSides, nextValue: string) => {
-    const next = parsePxMetricValue(nextValue);
-    if (next == null) return;
-    const sides: ClipPathInsetSides = {
-      top: clipInsetSides.top,
-      right: clipInsetSides.right,
-      bottom: clipInsetSides.bottom,
-      left: clipInsetSides.left,
-    };
-    sides[side] = next;
-    void onSetStyle("clip-path", buildInsetClipPathSides(sides, clipInsetSides.radius));
-  };
-
-  return (
-    <>
-      <FlatSlider
-        label="Mask inset"
-        value={clipInsetValue}
-        min={0}
-        max={Math.max(120, Math.ceil(clipInsetValue))}
-        step={1}
-        tier={clipInsetValue > 0 ? "explicitCustom" : "default"}
-        displayValue={`${formatNumericValue(clipInsetValue)}px`}
-        disabled={disabled}
-        onCommit={(next) =>
-          void onSetStyle("clip-path", buildInsetClipPathValue(next, radiusValue))
-        }
-      />
-      {showClipInsetSides && (
-        <div className="grid grid-cols-4 gap-2">
-          <MetricField
-            label="T"
-            value={formatPxMetricValue(clipInsetSides.top)}
-            disabled={disabled}
-            onCommit={(next) => commitClipInsetSide("top", next)}
-          />
-          <MetricField
-            label="R"
-            value={formatPxMetricValue(clipInsetSides.right)}
-            disabled={disabled}
-            onCommit={(next) => commitClipInsetSide("right", next)}
-          />
-          <MetricField
-            label="B"
-            value={formatPxMetricValue(clipInsetSides.bottom)}
-            disabled={disabled}
-            onCommit={(next) => commitClipInsetSide("bottom", next)}
-          />
-          <MetricField
-            label="L"
-            value={formatPxMetricValue(clipInsetSides.left)}
-            disabled={disabled}
-            onCommit={(next) => commitClipInsetSide("left", next)}
-          />
-        </div>
-      )}
     </>
   );
 }

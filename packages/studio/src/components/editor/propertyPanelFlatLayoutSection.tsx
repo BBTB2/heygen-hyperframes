@@ -203,8 +203,8 @@ export function LayoutFlexBlock({
       <FlatSegmentedRow
         label="Direction"
         options={[
-          { key: "row", node: "→ Row", active: direction === "row" },
-          { key: "column", node: "Column", active: direction === "column" },
+          { key: "row", node: "→ Row", label: "Row", active: direction === "row" },
+          { key: "column", node: "Column", label: "Column", active: direction === "column" },
         ]}
         disabled={disabled}
         onChange={(next) => void onSetStyle("flex-direction", next)}

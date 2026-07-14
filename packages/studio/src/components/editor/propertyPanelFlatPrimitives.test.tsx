@@ -89,8 +89,8 @@ describe("FlatSegmentedRow", () => {
       <FlatSegmentedRow
         label="Align"
         options={[
-          { key: "left", node: "L", active: false },
-          { key: "right", node: "R", active: true },
+          { key: "left", node: "L", label: "left", active: false },
+          { key: "right", node: "R", label: "right", active: true },
         ]}
         onChange={onChange}
       />,
@@ -103,6 +103,25 @@ describe("FlatSegmentedRow", () => {
       (options[0] as HTMLElement).dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
     expect(onChange).toHaveBeenCalledWith("left");
+    act(() => root.unmount());
+  });
+
+  it("gives each option an accessible name and pressed state — glyphs alone (e.g. two 'A' buttons) aren't a valid accessible name", () => {
+    const { host, root } = renderInto(
+      <FlatSegmentedRow
+        label="Case · Style"
+        options={[
+          { key: "normal", node: "A", label: "upright", active: true },
+          { key: "italic", node: "A", label: "italic", active: false },
+        ]}
+        onChange={vi.fn()}
+      />,
+    );
+    const options = host.querySelectorAll<HTMLButtonElement>('[data-flat-segment="true"]');
+    expect(options[0]?.getAttribute("aria-label")).toBe("upright");
+    expect(options[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(options[1]?.getAttribute("aria-label")).toBe("italic");
+    expect(options[1]?.getAttribute("aria-pressed")).toBe("false");
     act(() => root.unmount());
   });
 });
@@ -554,6 +573,130 @@ describe("FlatSlider — Grade extensions", () => {
     act(() => root.unmount());
   });
 
+  it("disables the reset button when the slider itself is disabled", () => {
+    const onReset = vi.fn();
+    const { host, root } = renderInto(
+      <FlatSlider
+        label="Exposure"
+        value={20}
+        min={0}
+        max={100}
+        tier="explicitCustom"
+        displayValue="20"
+        disabled
+        onReset={onReset}
+        onCommit={vi.fn()}
+      />,
+    );
+    const resetButton = host.querySelector<HTMLButtonElement>('[data-flat-slider-reset="true"]');
+    expect(resetButton?.disabled).toBe(true);
+    act(() => resetButton?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onReset).not.toHaveBeenCalled();
+    act(() => root.unmount());
+  });
+
+  it("a trailing throttled commit uses the current render's onCommit, not the one captured when it was scheduled", () => {
+    vi.useFakeTimers();
+    const onCommitA = vi.fn();
+    const { host, root } = renderInto(
+      <FlatSlider
+        label="Exposure"
+        value={0}
+        min={-100}
+        max={100}
+        tier="explicitCustom"
+        displayValue="0"
+        onCommit={onCommitA}
+      />,
+    );
+    const track = host.querySelector<HTMLElement>('[data-flat-slider-track="true"]');
+    if (!track) throw new Error("expected a track element");
+    Object.defineProperty(track, "getBoundingClientRect", {
+      value: () => ({ left: 0, width: 200, top: 0, height: 20, right: 200, bottom: 20 }),
+    });
+    act(() => {
+      // Leading-edge commit fires synchronously with onCommitA (clientX 150
+      // on a -100..100 track maps to 50, distinct from the initial value 0).
+      track.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, clientX: 150, pointerId: 1 }),
+      );
+    });
+    expect(onCommitA).toHaveBeenCalledTimes(1);
+    act(() => {
+      // Within the 40ms throttle window — queues a trailing commit (to 80,
+      // distinct from the just-committed 50) instead of firing immediately.
+      track.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, clientX: 180, pointerId: 1 }),
+      );
+    });
+    expect(onCommitA).toHaveBeenCalledTimes(1);
+    // Simulate the real-world race: something else causes this slider to
+    // re-render with a NEW onCommit closure before the queued timer fires
+    // (e.g. Grade's per-detail onCommit spreads the render-time whole
+    // grading object, so a different control committing in between produces
+    // a fresh closure). The stale closure must not win.
+    const onCommitB = vi.fn();
+    act(() => {
+      root.render(
+        <FlatSlider
+          label="Exposure"
+          value={0}
+          min={-100}
+          max={100}
+          tier="explicitCustom"
+          displayValue="0"
+          onCommit={onCommitB}
+        />,
+      );
+    });
+    act(() => {
+      vi.advanceTimersByTime(45);
+    });
+    expect(onCommitB).toHaveBeenCalledTimes(1);
+    expect(onCommitB).toHaveBeenCalledWith(80);
+    expect(onCommitA).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+    vi.useRealTimers();
+  });
+
+  it("flushes a still-queued trailing commit on unmount instead of dropping it", () => {
+    vi.useFakeTimers();
+    const onCommit = vi.fn();
+    const { host, root } = renderInto(
+      <FlatSlider
+        label="Opacity"
+        value={5}
+        min={0}
+        max={100}
+        tier="explicitCustom"
+        displayValue="5%"
+        onCommit={onCommit}
+      />,
+    );
+    const track = host.querySelector<HTMLElement>('[data-flat-slider-track="true"]');
+    if (!track) throw new Error("expected a track element");
+    Object.defineProperty(track, "getBoundingClientRect", {
+      value: () => ({ left: 0, width: 200, top: 0, height: 20, right: 200, bottom: 20 }),
+    });
+    act(() => {
+      track.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, clientX: 20, pointerId: 1 }),
+      );
+    });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    act(() => {
+      // Queues a trailing commit that never gets to fire before unmount.
+      track.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, clientX: 160, pointerId: 1 }),
+      );
+    });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+    expect(onCommit).toHaveBeenCalledTimes(2);
+    expect(onCommit).toHaveBeenNthCalledWith(2, 80);
+    vi.useRealTimers();
+  });
+
   it("supports keyboard operation: focusable, arrow keys step, Home/End clamp to range", () => {
     const onCommit = vi.fn();
     const { host, root } = renderInto(
@@ -726,6 +869,31 @@ describe("FlatSelectRow — label/value options", () => {
     );
     const options = Array.from(host.querySelectorAll("option")).map((o) => o.textContent);
     expect(options).toEqual(["normal", "multiply", "screen"]);
+    act(() => root.unmount());
+  });
+
+  it("preserves a valid authored value outside the preset list instead of misrepresenting it as the first option", () => {
+    const onChange = vi.fn();
+    const { host, root } = renderInto(
+      <FlatSelectRow
+        label="Blend"
+        value="difference"
+        options={["normal", "multiply", "screen", "overlay"]}
+        tier="explicitCustom"
+        onChange={onChange}
+      />,
+    );
+    const select = host.querySelector<HTMLSelectElement>("select");
+    // A native <select> whose `value` matches no <option> falls back to
+    // selectedIndex 0 — silently showing "normal" as selected even though
+    // the real persisted value is "difference". The row must add an option
+    // for the current value so it's genuinely representable.
+    expect(select?.value).toBe("difference");
+    const options = Array.from(host.querySelectorAll("option")).map((o) => o.textContent);
+    expect(options).toContain("difference");
+    // And reselecting the (still-present) first preset must be an explicit
+    // user choice, not something that already happened silently.
+    expect(onChange).not.toHaveBeenCalled();
     act(() => root.unmount());
   });
 });

@@ -12,7 +12,7 @@ import {
   trackStudioPendingEdit,
 } from "../../utils/studioPendingEdits";
 import type { DomEditSelection } from "./domEditing";
-import { stripQueryAndHash } from "./propertyPanelHelpers";
+import { selectionIdentityKey, stripQueryAndHash } from "./propertyPanelHelpers";
 import {
   acceptStudioRuntimeMessage,
   postRuntimeControlMessage,
@@ -196,6 +196,38 @@ export function useColorGradingController({
   onSetAttributeLiveRef.current = onSetAttributeLive;
   latestGradingRef.current = grading;
   compareEnabledRef.current = compareEnabled;
+
+  // Reset all per-element state when the selection changes to a different
+  // element — unlike the legacy ColorGradingSection (remounted via a
+  // `key={selectionIdentityKey(element)}` from its parent), this hook is
+  // called unconditionally on every render, so nothing naturally remounts it.
+  // Without this, switching selection reuses the previous element's grading/
+  // compare/mediaMetadata state and can commit stale pending work onto the
+  // new target. Adjusting state during render (comparing against a ref) is
+  // React's documented pattern for this — it resolves in the same render
+  // pass instead of flashing the stale state for one frame via useEffect.
+  const identityKey = selectionIdentityKey(element);
+  const identityKeyRef = useRef(identityKey);
+  if (identityKeyRef.current !== identityKey) {
+    identityKeyRef.current = identityKey;
+    if (persistTimerRef.current) {
+      clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+    }
+    pendingPersistValueRef.current = undefined;
+    for (const timer of statusTimersRef.current) clearTimeout(timer);
+    statusTimersRef.current = [];
+    const freshGrading = readColorGradingFromElement(element);
+    latestGradingRef.current = freshGrading;
+    setGrading(freshGrading);
+    setCompareEnabled(false);
+    compareEnabledRef.current = false;
+    setApplyScope("source-file");
+    setApplyBusy(false);
+    setRuntimeStatus({ state: "pending", message: "Waiting for runtime" });
+    setMediaMetadata(null);
+  }
+
   const target = useMemo(
     (): HfColorGradingTarget => ({
       id: element.id ?? null,
@@ -225,18 +257,29 @@ export function useColorGradingController({
       )}`,
       { signal: controller.signal },
     )
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data: MediaMetadataResponse | null) => {
+      .then(async (response) => {
+        if (!response.ok) return { ok: false as const };
+        const data: MediaMetadataResponse | null = await response.json();
+        return { ok: true as const, metadata: data?.metadata ?? null };
+      })
+      .then((result) => {
         if (controller.signal.aborted) return;
-        const metadata = data?.metadata ?? null;
-        MEDIA_METADATA_CACHE.set(cacheKey, metadata);
-        setMediaMetadata(metadata);
+        // Only cache a definitive answer from a successful response — a non-OK
+        // status is a transient/server failure, not a stable "no metadata"
+        // result, and caching it would suppress the HDR banner for this asset
+        // for the page's whole lifetime. Leave the key absent so the next
+        // selection retries.
+        if (!result.ok) {
+          setMediaMetadata(null);
+          return;
+        }
+        MEDIA_METADATA_CACHE.set(cacheKey, result.metadata);
+        setMediaMetadata(result.metadata);
       })
       .catch(() => {
-        // Don't cache a transient fetch failure — a cached null would suppress
-        // the HDR banner for this asset for the page's whole lifetime. Leave the
-        // key absent so the next selection retries. (A successful response with
-        // no metadata still caches null above, which IS a stable answer.)
+        // Same reasoning as the non-OK branch above: don't cache a network-
+        // level fetch failure either.
+        if (!controller.signal.aborted) setMediaMetadata(null);
       });
     return () => controller.abort();
   }, [projectId, selectedAssetPath]);

@@ -87,6 +87,10 @@ export function FlatRow({
 export interface FlatSegmentOption {
   key: string;
   node: ReactNode;
+  /** Accessible name — the glyph alone (e.g. two indistinguishable "A"
+   *  buttons for upright vs. italic) isn't a valid accessible name on its
+   *  own. */
+  label: string;
   active: boolean;
 }
 
@@ -114,6 +118,8 @@ export function FlatSegmentedRow({
             <button
               type="button"
               data-flat-segment="true"
+              aria-label={option.label}
+              aria-pressed={option.active}
               disabled={disabled}
               onClick={() => onChange(option.key)}
               className={`px-1.5 py-1 text-[11px] transition-colors disabled:cursor-not-allowed ${
@@ -286,6 +292,14 @@ export function FlatSlider({
   // prop, so the release flush must dedupe against what we just sent, not
   // against the stale prop, or the same value commits twice.
   const lastCommittedRef = useRef(value);
+  // Always the current render's onCommit — read inside the throttle timer
+  // instead of closing over the callback at schedule time. A caller whose
+  // onCommit spreads other current state (e.g. Grade's "...grading, details:
+  // {...}") would otherwise let a queued trailing commit fire ~40ms later
+  // with a stale snapshot and silently revert whatever the user changed on a
+  // different control in between.
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
 
   useEffect(() => {
     if (draggingRef.current) return;
@@ -294,7 +308,14 @@ export function FlatSlider({
   }, [value]);
   useEffect(
     () => () => {
-      if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+      if (commitTimerRef.current) {
+        clearTimeout(commitTimerRef.current);
+        // Flush rather than drop a still-queued edit — this only fires if the
+        // component unmounts mid-drag (e.g. selection changes away), and
+        // silently discarding the user's last dragged position would look
+        // like data loss.
+        if (pendingRef.current !== null) onCommitRef.current(pendingRef.current);
+      }
     },
     [],
   );
@@ -316,7 +337,7 @@ export function FlatSlider({
     lastCommitAtRef.current = Date.now();
     if (nextDraft !== lastCommittedRef.current) {
       lastCommittedRef.current = nextDraft;
-      onCommit(nextDraft);
+      onCommitRef.current(nextDraft);
     }
   };
   const scheduleCommit = (nextDraft: number) => {
@@ -346,6 +367,7 @@ export function FlatSlider({
         aria-valuemax={max}
         aria-disabled={disabled}
         tabIndex={disabled ? -1 : 0}
+        style={{ touchAction: "none" }}
         className={`relative h-5 flex-1 ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}
         onPointerDown={(e) => {
           if (disabled) return;
@@ -429,8 +451,9 @@ export function FlatSlider({
               type="button"
               data-flat-slider-reset="true"
               title="Remove — fall back to default"
+              disabled={disabled}
               onClick={onReset}
-              className="text-panel-text-3 hover:text-panel-text-1"
+              className="text-panel-text-3 hover:text-panel-text-1 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <RotateCcw size={11} />
             </button>
@@ -465,6 +488,17 @@ export function FlatSelectRow({
   const normalizedOptions = options.map((option) =>
     typeof option === "string" ? { value: option, label: option } : option,
   );
+  // A valid authored value outside the preset list (e.g. a `mix-blend-mode`
+  // or `object-position` this row doesn't offer as a preset) must not be
+  // silently misrepresented as the first option — the native <select> falls
+  // back to selectedIndex 0 when `value` matches no <option>, and reselecting
+  // that visible-but-wrong preset overwrites the real persisted value. Prepend
+  // the current value so it's always representable, matching legacy
+  // `SelectField`'s same guard.
+  const renderedOptions =
+    value && !normalizedOptions.some((option) => option.value === value)
+      ? [{ value, label: value }, ...normalizedOptions]
+      : normalizedOptions;
   return (
     <div className="group flex min-h-[30px] items-center justify-between">
       <span className={`text-[11px] ${VALUE_TIER_LABEL_CLASS[tier]}`}>{label}</span>
@@ -476,7 +510,7 @@ export function FlatSelectRow({
             onChange={(e) => onChange(e.target.value)}
             className={`appearance-none bg-transparent text-right font-mono text-[11px] outline-none disabled:cursor-not-allowed ${VALUE_TIER_VALUE_CLASS[tier]}`}
           >
-            {normalizedOptions.map((option) => (
+            {renderedOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
