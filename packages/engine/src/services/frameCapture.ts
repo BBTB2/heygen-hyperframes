@@ -201,14 +201,34 @@ export interface CaptureSession {
  * forceScreenshot. Discriminant-based guard (not instanceof) so it survives
  * duplicated module instances across package boundaries.
  */
+/**
+ * Structured detail carried alongside the human-readable message — lets
+ * telemetry report the actual failing dB / frame index instead of the
+ * orchestrator having to regex them back out of formatted text. All optional:
+ * a blank-frame trip has no PSNR score, so `failedDb`/`verifyThresholdDb`
+ * are omitted for that throw site.
+ */
+export interface DrawElementVerificationDetails {
+  frameIndex?: number;
+  failedDb?: number;
+  verifyThresholdDb?: number;
+}
+
 export class DrawElementVerificationError extends Error {
-  constructor(message: string) {
+  readonly frameIndex?: number;
+  readonly failedDb?: number;
+  readonly verifyThresholdDb?: number;
+
+  constructor(message: string, details?: DrawElementVerificationDetails) {
     super(message);
     this.name = "DrawElementVerificationError";
     // Discriminant property, assigned dynamically: isDrawElementVerificationError
     // reads it structurally so detection survives duplicated module instances
     // across package boundaries (where instanceof fails).
     (this as unknown as { deVerificationFailure: boolean }).deVerificationFailure = true;
+    this.frameIndex = details?.frameIndex;
+    this.failedDb = details?.failedDb;
+    this.verifyThresholdDb = details?.verifyThresholdDb;
   }
 }
 
@@ -220,6 +240,31 @@ export function isDrawElementVerificationError(err: unknown): boolean {
     e = (e as { cause?: unknown }).cause;
   }
   return false;
+}
+
+/**
+ * Extracts the structured details off a (possibly cause-wrapped) verification
+ * error — same chain-walk as isDrawElementVerificationError, structural
+ * (not instanceof) for the same duplicated-module-instance reason. Returns
+ * undefined when the error isn't a verification failure at all.
+ */
+export function getDrawElementVerificationDetails(
+  err: unknown,
+): DrawElementVerificationDetails | undefined {
+  let e: unknown = err;
+  for (let depth = 0; depth < 5 && typeof e === "object" && e !== null; depth++) {
+    const rec = e as { deVerificationFailure?: boolean } & Partial<DrawElementVerificationDetails>;
+    if (rec.deVerificationFailure === true) {
+      const details: DrawElementVerificationDetails = {};
+      if (typeof rec.frameIndex === "number") details.frameIndex = rec.frameIndex;
+      if (typeof rec.failedDb === "number") details.failedDb = rec.failedDb;
+      if (typeof rec.verifyThresholdDb === "number")
+        details.verifyThresholdDb = rec.verifyThresholdDb;
+      return details;
+    }
+    e = (e as { cause?: unknown }).cause;
+  }
+  return undefined;
 }
 
 /** Wait for inline CSS background images introduced by the latest seek. */

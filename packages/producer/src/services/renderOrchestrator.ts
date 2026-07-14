@@ -76,6 +76,7 @@ import {
   isMemoryExhaustionError,
   isTransientBrowserError,
   isDrawElementVerificationError,
+  getDrawElementVerificationDetails,
 } from "@hyperframes/engine";
 import { join, dirname, resolve } from "path";
 import { totalmem } from "node:os";
@@ -449,6 +450,10 @@ export interface RenderPerfSummary {
     selfVerifyFallback: boolean;
     /** What tripped the fallback retry: psnr | blank | oom | capture_error. */
     fallbackReason?: string;
+    /** The failing PSNR (dB) when `fallbackReason === "psnr"`; undefined for blank/oom/capture_error (no score exists). */
+    fallbackFailedDb?: number;
+    /** Frame index the verification failure was detected at; set for both "psnr" and "blank" fallback reasons. */
+    fallbackFrameIndex?: number;
     /** Blank-guard counters. */
     blankSuspects: number;
     blankDeterministicAccepts: number;
@@ -1737,6 +1742,11 @@ export async function executeRenderJob(
     let captureParallelStreamForced = false;
     let deSelfVerifyFallback = false;
     let deFallbackReason: string | undefined;
+    // Structured detail behind deFallbackReason's "blank"/"psnr" bucket — the
+    // failing dB and frame index otherwise only exist as text inside the
+    // thrown error's message, unavailable to telemetry.
+    let deFallbackFailedDb: number | undefined;
+    let deFallbackFrameIndex: number | undefined;
     let deDrainStats: import("./render/stages/captureStreamingStage.js").DeDrainStats | undefined;
     updateCaptureObservability({ forceScreenshot: captureForceScreenshot });
     observability.checkpoint("compile", "composition metadata resolved", {
@@ -2718,6 +2728,11 @@ export async function executeRenderJob(
             : isMemoryExhaustion
               ? "oom"
               : "capture_error";
+          if (isVerifyError) {
+            const verifyDetails = getDrawElementVerificationDetails(err);
+            deFallbackFailedDb = verifyDetails?.failedDb;
+            deFallbackFrameIndex = verifyDetails?.frameIndex;
+          }
           log.warn(
             isVerifyError
               ? "[Render] drawElement self-verification failed; re-rendering via screenshot"
@@ -2735,6 +2750,8 @@ export async function executeRenderJob(
             forceScreenshot: true,
             deSelfVerifyFallback,
             deFallbackReason,
+            deFallbackFailedDb,
+            deFallbackFrameIndex,
           });
           probeSession = null;
           // Must clear BEFORE resolveParallelRouterRetryPlan recomputes
@@ -3023,6 +3040,8 @@ export async function executeRenderJob(
         preRouterWorkers: deParallelRouter ? preRoutingWorkerCount : undefined,
         selfVerifyFallback: deSelfVerifyFallback,
         fallbackReason: deFallbackReason,
+        fallbackFailedDb: deFallbackFailedDb,
+        fallbackFrameIndex: deFallbackFrameIndex,
         drainStats: deDrainStats,
       },
       hdrDiagnostics,

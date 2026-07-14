@@ -72,6 +72,10 @@ export interface DrawElementPerfInput {
   preRouterWorkers?: number;
   selfVerifyFallback: boolean;
   fallbackReason?: string;
+  /** The failing PSNR (dB) when `fallbackReason === "psnr"`; undefined for blank/oom/capture_error. */
+  fallbackFailedDb?: number;
+  /** Frame index the verification failure was detected at; set for both "psnr" and "blank". */
+  fallbackFrameIndex?: number;
   drainStats?: {
     verifyChecked: number;
     verifyMinDb?: number;
@@ -112,6 +116,11 @@ function aggregateDrawElement(
     verifyInitMs: perfs.reduce((sum, p) => sum + (p.deVerifyInitMs ?? 0), 0),
     selfVerifyFallback: de.selfVerifyFallback,
     fallbackReason: de.fallbackReason,
+    fallbackFailedDb:
+      de.fallbackFailedDb === undefined
+        ? undefined
+        : Math.round(Math.min(de.fallbackFailedDb, 999) * 10) / 10,
+    fallbackFrameIndex: de.fallbackFrameIndex,
     blankSuspects: drain?.blankSuspects ?? 0,
     blankDeterministicAccepts: drain?.blankDeterministicAccepts ?? 0,
     blankRecaptures: drain?.blankRecaptures ?? 0,

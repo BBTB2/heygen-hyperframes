@@ -1,11 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
+  DrawElementVerificationError,
   formatHttpErrorDiagnostic,
   formatConsoleDiagnostic,
   formatNavigationFailureDiagnostic,
   formatNavigationStartDiagnostic,
   formatRequestFailureDiagnostic,
+  getDrawElementVerificationDetails,
   isFontResourceError,
+  isDrawElementVerificationError,
   sanitizeDiagnosticUrl,
 } from "./frameCapture.js";
 
@@ -220,5 +223,40 @@ describe("navigation diagnostics", () => {
         statusText: "Forbidden",
       }),
     ).toBe("[Browser:HTTP403] GET https://cdn.example.com/frame.png resource=image Forbidden");
+  });
+});
+
+describe("DrawElementVerificationError details", () => {
+  it("carries frameIndex/failedDb/verifyThresholdDb when provided", () => {
+    const err = new DrawElementVerificationError("drawElement self-verify failed at frame 649", {
+      frameIndex: 649,
+      failedDb: 28.4,
+      verifyThresholdDb: 32,
+    });
+    expect(isDrawElementVerificationError(err)).toBe(true);
+    expect(getDrawElementVerificationDetails(err)).toEqual({
+      frameIndex: 649,
+      failedDb: 28.4,
+      verifyThresholdDb: 32,
+    });
+  });
+
+  it("omits fields that weren't supplied (blank-frame throws have no dB)", () => {
+    const err = new DrawElementVerificationError("blank drawElement frame 12", { frameIndex: 12 });
+    expect(getDrawElementVerificationDetails(err)).toEqual({ frameIndex: 12 });
+  });
+
+  it("returns undefined for a non-verification error", () => {
+    expect(getDrawElementVerificationDetails(new Error("boring"))).toBeUndefined();
+  });
+
+  it("finds details through a wrapping cause chain (producer's CaptureStageError)", () => {
+    const inner = new DrawElementVerificationError("psnr breach", {
+      frameIndex: 5,
+      failedDb: 12.1,
+    });
+    const wrapper = new Error("capture stage failed", { cause: inner });
+    expect(isDrawElementVerificationError(wrapper)).toBe(true);
+    expect(getDrawElementVerificationDetails(wrapper)).toEqual({ frameIndex: 5, failedDb: 12.1 });
   });
 });
