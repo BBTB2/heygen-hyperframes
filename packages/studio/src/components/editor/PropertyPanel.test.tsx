@@ -114,9 +114,74 @@ function styleOnlyElement() {
   };
 }
 
+// Flex fixture (Plan 3a Task 5): display:flex drives BOTH the legacy
+// StyleSections Flex `Section` AND the new flat Layout group's
+// LayoutFlexBlock. Used to prove Flex renders exactly once on the flat path.
+// styles are read from computedStyles (PropertyPanel line ~113), so set it
+// there.
+function flexElement() {
+  return {
+    ...baseElement(),
+    id: "flex-row",
+    selector: ".flex-row",
+    label: "Flex Row",
+    textFields: [],
+    computedStyles: { display: "flex" },
+  };
+}
+
+// Motion fixture (Plan 3b Task 4): an authored clip range (data-start present)
+// makes resolveEditingSections turn on `sections.timing`, so the Motion group
+// renders via its Timing gate even with no GSAP edit handlers wired.
+function animatedElement() {
+  return {
+    ...baseElement(),
+    id: "anim-clip",
+    selector: ".anim-clip",
+    label: "Anim Clip",
+    dataAttributes: { start: "0", duration: "4" },
+  };
+}
+
+// Inferred-timing fixture (whole-plan coherence fix): NO explicit data-start
+// or data-duration — sections.timing must turn on via animationCount (fed
+// from gsapAnimations.length), not an authored attribute, so both the Motion
+// Timing row and the Layout keyframe gutter are forced to infer the range
+// from the element's own GSAP tween instead of reading it off an attribute.
+function inferredMotionElement() {
+  return {
+    ...baseElement(),
+    id: "inferred-anim",
+    selector: "#inferred-anim",
+    label: "Inferred Anim",
+  };
+}
+
+// A single "to" tween running from t=2 to t=5 (position 2, duration 3), with
+// keyframes on "x" at 0/50/100% — enough to drive both FlatTimingRow's
+// inference and the Layout "x" row's keyframe-seek gutter.
+const INFERRED_TIMING_ANIMATION = {
+  id: "a1",
+  targetSelector: "#inferred-anim",
+  method: "to",
+  position: 2,
+  duration: 3,
+  properties: { x: 100 },
+  keyframes: {
+    format: "percentage",
+    keyframes: [
+      { percentage: 0, properties: { x: 0 } },
+      { percentage: 50, properties: { x: 50 } },
+      { percentage: 100, properties: { x: 100 } },
+    ],
+  },
+} as never;
+
 async function renderPanel(
   flatEnabled: boolean,
   elementOverride: ReturnType<typeof baseElement> = baseElement(),
+  propsOverride: Partial<PropertyPanelProps> = {},
+  currentTime?: number,
 ) {
   vi.resetModules();
   vi.doMock("./manualEditingAvailability", async () => {
@@ -125,6 +190,13 @@ async function renderPanel(
     );
     return { ...actual, STUDIO_FLAT_INSPECTOR_ENABLED: flatEnabled };
   });
+  // Seed the playhead on the SAME store instance PropertyPanel.tsx will read via
+  // usePlayerStore (module-fresh since the resetModules() above) — must happen
+  // before PropertyPanel is imported/rendered so its initial render sees it.
+  if (currentTime !== undefined) {
+    const { usePlayerStore } = await import("../../player/store/playerStore");
+    usePlayerStore.getState().setCurrentTime(currentTime);
+  }
   const { PropertyPanel } = await import("./PropertyPanel");
   const host = document.createElement("div");
   document.body.append(host);
@@ -138,6 +210,7 @@ async function renderPanel(
     onSetStyle: vi.fn(),
     onSetText: vi.fn(),
     onSetAttributeLive: vi.fn(),
+    ...propsOverride,
   } as unknown as PropertyPanelProps;
   act(() => {
     root.render(<PropertyPanel {...props} />);
@@ -149,6 +222,18 @@ async function renderPanel(
 // flag read); transforming the full section graph uncached can exceed the 5s
 // default under heavy parallel full-suite load, so give these a wider margin.
 const RENDER_TIMEOUT_MS = 20_000;
+
+// Find the collapsed accordion row whose title matches and click it open.
+function openFlatGroup(host: HTMLElement, title: string) {
+  const row = Array.from(host.querySelectorAll('[data-flat-group-collapsed="true"]')).find((el) =>
+    el.textContent?.includes(title),
+  );
+  if (!row) throw new Error(`expected a collapsed ${title} row`);
+  act(() => row.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+}
+
+const openGroupText = (host: HTMLElement) =>
+  host.querySelector('[data-flat-group-open="true"]')?.textContent ?? "";
 
 describe("PropertyPanel — STUDIO_FLAT_INSPECTOR_ENABLED off", () => {
   it(
@@ -261,6 +346,270 @@ describe("PropertyPanel — Style group (flag on)", () => {
       act(() => styleCollapsedRow.dispatchEvent(new MouseEvent("click", { bubbles: true })));
       expect(textGroup()?.textContent).not.toContain("Text");
       expect(host.querySelector('[data-flat-group-open="true"]')?.textContent).toContain("Style");
+      act(() => root.unmount());
+    },
+    RENDER_TIMEOUT_MS,
+  );
+});
+
+describe("PropertyPanel — Layout group (Plan 3a)", () => {
+  it(
+    "always renders the Layout group, and opening it closes whichever other group was open",
+    async () => {
+      const { host, root } = await renderPanel(true);
+      // Text group is open by default for the base text-editable fixture.
+      expect(host.querySelector('[data-flat-group-open="true"]')?.textContent).toContain("Text");
+
+      const layoutCollapsedRow = Array.from(
+        host.querySelectorAll('[data-flat-group-collapsed="true"]'),
+      ).find((el) => el.textContent?.includes("Layout"));
+      if (!layoutCollapsedRow) throw new Error("expected a collapsed Layout row");
+      act(() => layoutCollapsedRow.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+      const openGroup = host.querySelector('[data-flat-group-open="true"]');
+      expect(openGroup?.textContent).toContain("Layout");
+      expect(openGroup?.textContent).toContain("X");
+      expect(openGroup?.textContent).not.toContain("Ask agent"); // sanity: not matching the footer
+      act(() => root.unmount());
+    },
+    RENDER_TIMEOUT_MS,
+  );
+
+  it(
+    "renders Flex exactly once on the flat path (flat Layout only, legacy suppressed)",
+    async () => {
+      const { host, root } = await renderPanel(true, flexElement());
+      const layoutCollapsedRow = Array.from(
+        host.querySelectorAll('[data-flat-group-collapsed="true"]'),
+      ).find((el) => el.textContent?.includes("Layout"));
+      if (!layoutCollapsedRow) throw new Error("expected a collapsed Layout row");
+      act(() => layoutCollapsedRow.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+      // The legacy StyleSections Flex `Section` (data-panel-section="flex") must
+      // NOT render on the flat path — the only two Flex renderers are the legacy
+      // Section and the flat LayoutFlexBlock, so its absence + the flat block's
+      // presence proves Flex renders exactly once (not twice, not zero).
+      expect(host.querySelector('[data-panel-section="flex"]')).toBeNull();
+      const openGroup = host.querySelector('[data-flat-group-open="true"]');
+      expect(openGroup?.textContent).toContain("Layout");
+      expect(openGroup?.textContent).toContain("Flex");
+      act(() => root.unmount());
+    },
+    RENDER_TIMEOUT_MS,
+  );
+});
+
+describe("PropertyPanel — Motion group (Plan 3b)", () => {
+  it(
+    "renders the Motion group with Timing, and opening it closes the previously open group (4-way exclusivity)",
+    async () => {
+      const { host, root } = await renderPanel(true, animatedElement());
+      // Text is open by default for the text-editable fixture.
+      expect(openGroupText(host)).toContain("Text");
+
+      openFlatGroup(host, "Motion");
+      const openGroup = openGroupText(host);
+      expect(openGroup).toContain("Motion");
+      // FlatTimingRow (Start/End/Duration) renders inside the Motion group.
+      expect(openGroup).toContain("Start");
+      expect(openGroup).toContain("Duration");
+      // One-open accordion: opening Motion closed the Text group.
+      expect(openGroup).not.toContain("Text");
+
+      // Reverse direction: opening Layout closes Motion.
+      openFlatGroup(host, "Layout");
+      const openAfter = openGroupText(host);
+      expect(openAfter).toContain("Layout");
+      expect(openAfter).not.toContain("Motion");
+      act(() => root.unmount());
+    },
+    RENDER_TIMEOUT_MS,
+  );
+
+  it(
+    "hides the effect list (showEffects off) when the GSAP edit handlers are absent",
+    async () => {
+      // STUDIO_GSAP_PANEL_ENABLED defaults on, but none of the five required
+      // edit handlers are supplied here, so the effect-list half of the
+      // double-gate stays closed — only the Timing row shows.
+      const { host, root } = await renderPanel(true, animatedElement());
+      openFlatGroup(host, "Motion");
+      const openGroup = openGroupText(host);
+      expect(openGroup).toContain("Motion");
+      expect(openGroup).toContain("Duration"); // Timing still shows
+      expect(openGroup).not.toContain("Add effect"); // effects gated off
+      act(() => root.unmount());
+    },
+    RENDER_TIMEOUT_MS,
+  );
+
+  it(
+    "shows the effect list (showEffects on) when the flag and all five handlers are present",
+    async () => {
+      const { host, root } = await renderPanel(true, animatedElement(), {
+        onUpdateGsapProperty: vi.fn(),
+        onUpdateGsapMeta: vi.fn(),
+        onDeleteGsapAnimation: vi.fn(),
+        onAddGsapProperty: vi.fn(),
+        onAddGsapAnimation: vi.fn(),
+      });
+      openFlatGroup(host, "Motion");
+      expect(openGroupText(host)).toContain("Add effect");
+      act(() => root.unmount());
+    },
+    RENDER_TIMEOUT_MS,
+  );
+});
+
+// Whole-plan coherence fix: Layout's keyframe-seek basis and Motion's Timing
+// row basis must agree on the same start/duration for an element that has
+// animations but no explicit data-duration — before the fix, Layout fell back
+// to a naive `duration ?? 1` while Motion correctly inferred the range from
+// the tween (position 2, duration 3 -> start 2 / duration 3 / end 5).
+describe("PropertyPanel — flat Layout/Motion timing agreement (whole-plan coherence fix)", () => {
+  it(
+    "Motion's Timing row shows the inferred start/end/duration for an element with animations but no explicit duration",
+    async () => {
+      const { host, root } = await renderPanel(true, inferredMotionElement(), {
+        gsapAnimations: [INFERRED_TIMING_ANIMATION],
+      });
+      openFlatGroup(host, "Motion");
+      const motionGroup = host.querySelector('[data-flat-group-open="true"]');
+      if (!motionGroup) throw new Error("expected the Motion group to be open");
+      expect(motionGroup.textContent).toContain("Inferred");
+      const inputs = motionGroup.querySelectorAll<HTMLInputElement>("input");
+      // FlatTimingRow renders Start, End, Duration in that order.
+      expect(inputs[0]?.value).toBe("2.00s");
+      expect(inputs[1]?.value).toBe("5.00s");
+      expect(inputs[2]?.value).toBe("3.00s");
+      act(() => root.unmount());
+    },
+    RENDER_TIMEOUT_MS,
+  );
+
+  it(
+    "Layout's X-row keyframe gutter seeks to the SAME absolute time Motion's Timing row shows as the midpoint (50% of an inferred 2s-5s range = 3.5s)",
+    async () => {
+      const onSeekToTime = vi.fn();
+      // Seed the playhead at the clip's real start (t=2, the 0% keyframe's
+      // absolute time) — now that the follow-up fix also recomputes
+      // `currentPct` from the corrected elStart/elDuration basis, "current
+      // position is at the 0% keyframe" must be expressed as an actual t=2
+      // seek rather than relying on the store's untouched t=0 default (which,
+      // post-fix, resolves to a currentPct of -66.7% — well outside the 0%
+      // keyframe's tolerance window, and no longer "the case the coherence
+      // bug affected" that this test documents).
+      const { host, root } = await renderPanel(
+        true,
+        inferredMotionElement(),
+        { gsapAnimations: [INFERRED_TIMING_ANIMATION], onSeekToTime },
+        2,
+      );
+      openFlatGroup(host, "Layout");
+      const layoutGroup = host.querySelector('[data-flat-group-open="true"]');
+      if (!layoutGroup) throw new Error("expected the Layout group to be open");
+
+      const xRow = Array.from(layoutGroup.querySelectorAll<HTMLElement>(".group")).find(
+        (el) => el.querySelector("span")?.textContent === "X",
+      );
+      if (!xRow) throw new Error("expected an X row");
+      const gutter = xRow.querySelector('[data-flat-kf-gutter="true"]');
+      if (!gutter) throw new Error("expected a keyframe gutter on the X row");
+      // The diamond button always carries a `title`; the two plain arrow
+      // buttons don't. At currentPct=0 (playhead on the 0% keyframe), the prev
+      // arrow is disabled (no earlier keyframe) and the next arrow seeks to
+      // the 50% keyframe — exactly the case the coherence bug affected.
+      const nextArrow = Array.from(gutter.querySelectorAll<HTMLButtonElement>("button")).find(
+        (b) => !b.title && !b.disabled,
+      );
+      if (!nextArrow) throw new Error("expected an enabled next-keyframe arrow button");
+      act(() => nextArrow.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+      // Same basis as the Timing row: start 2 + 50% * duration 3 = 3.5.
+      expect(onSeekToTime).toHaveBeenCalledWith(3.5);
+      act(() => root.unmount());
+    },
+    RENDER_TIMEOUT_MS,
+  );
+});
+
+// Follow-up fix (review of 684ec4e87): the seek-basis fix above corrected
+// WHERE a keyframe click seeks to, but `currentPct` — the value that drives
+// KeyframeNavigation's diamond active/inactive state and prev/next arrow
+// targeting — still used the OLD naive basis. For an inferred-duration
+// element, seeking to a keyframe's actual absolute time no longer lit that
+// keyframe's diamond as active. Prove the round-trip here: seek to the exact
+// absolute time of the 50% keyframe (2 + 0.5*3 = 3.5) and confirm its diamond
+// renders "active" (title="Remove x keyframe"), not "inactive"/"ghost".
+describe("PropertyPanel — flat Layout currentPct basis (currentPct follow-up fix)", () => {
+  it(
+    "lights the X-row keyframe diamond as active when the playhead is seeked to that keyframe's real absolute time (inferred 2s-5s range, 50% keyframe = 3.5s)",
+    async () => {
+      const { host, root } = await renderPanel(
+        true,
+        inferredMotionElement(),
+        { gsapAnimations: [INFERRED_TIMING_ANIMATION] },
+        3.5,
+      );
+      openFlatGroup(host, "Layout");
+      const layoutGroup = host.querySelector('[data-flat-group-open="true"]');
+      if (!layoutGroup) throw new Error("expected the Layout group to be open");
+
+      const xRow = Array.from(layoutGroup.querySelectorAll<HTMLElement>(".group")).find(
+        (el) => el.querySelector("span")?.textContent === "X",
+      );
+      if (!xRow) throw new Error("expected an X row");
+      const gutter = xRow.querySelector('[data-flat-kf-gutter="true"]');
+      if (!gutter) throw new Error("expected a keyframe gutter on the X row");
+      const diamond = gutter.querySelector<HTMLButtonElement>("button[title]");
+      if (!diamond) throw new Error("expected a keyframe diamond button");
+      // KeyframeDiamond's title mapping: active -> "Remove ... keyframe",
+      // inactive -> "Add ... keyframe", ghost -> "Convert ... to keyframes".
+      // Before this fix, currentPct was computed against the naive
+      // elStart=0/elDuration=1 basis, so t=3.5 produced currentPct=350% —
+      // nowhere near the 50% keyframe within KeyframeNavigation's tolerance —
+      // and the diamond stayed "inactive" even though the playhead was
+      // exactly on that keyframe's real time.
+      expect(diamond.title).toBe("Remove x keyframe");
+      act(() => root.unmount());
+    },
+    RENDER_TIMEOUT_MS,
+  );
+
+  it(
+    "prev/next arrows re-center on the current keyframe once currentPct agrees with the corrected seek basis",
+    async () => {
+      const onSeekToTime = vi.fn();
+      const { host, root } = await renderPanel(
+        true,
+        inferredMotionElement(),
+        { gsapAnimations: [INFERRED_TIMING_ANIMATION], onSeekToTime },
+        3.5,
+      );
+      openFlatGroup(host, "Layout");
+      const layoutGroup = host.querySelector('[data-flat-group-open="true"]');
+      if (!layoutGroup) throw new Error("expected the Layout group to be open");
+
+      const xRow = Array.from(layoutGroup.querySelectorAll<HTMLElement>(".group")).find(
+        (el) => el.querySelector("span")?.textContent === "X",
+      );
+      if (!xRow) throw new Error("expected an X row");
+      const gutter = xRow.querySelector('[data-flat-kf-gutter="true"]');
+      if (!gutter) throw new Error("expected a keyframe gutter on the X row");
+      const buttons = Array.from(gutter.querySelectorAll<HTMLButtonElement>("button"));
+      const [prevArrow, , nextArrow] = buttons;
+      if (!prevArrow || !nextArrow) throw new Error("expected prev/next arrow buttons");
+      // At the 50% keyframe (t=3.5), prev should target the 0% keyframe
+      // (absolute t=2) and next should target the 100% keyframe (absolute
+      // t=5) — both only resolvable once currentPct agrees with elStart=2/
+      // elDuration=3, the same basis the seek fix already uses.
+      expect(prevArrow.disabled).toBe(false);
+      act(() => prevArrow.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      expect(onSeekToTime).toHaveBeenLastCalledWith(2);
+
+      expect(nextArrow.disabled).toBe(false);
+      act(() => nextArrow.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      expect(onSeekToTime).toHaveBeenLastCalledWith(5);
       act(() => root.unmount());
     },
     RENDER_TIMEOUT_MS,
