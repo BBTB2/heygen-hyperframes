@@ -262,6 +262,17 @@ export {
 
 export { groupIntoLayers, type CompositeLayer } from "./utils/layerCompositor.js";
 
+export {
+  diffGpuParityFrames,
+  diffGpuParityPngs,
+  verifyGpuParity,
+  type RgbaFrame,
+  type GpuParityDiffOptions,
+  type GpuParityDiffResult,
+  type BlackOnlyInARegion,
+  type VerifyGpuParityResult,
+} from "./utils/gpuParityDiff.js";
+
 // ── Shader transitions ────────────────────────────────────────────────────────
 export {
   type TransitionFn,
