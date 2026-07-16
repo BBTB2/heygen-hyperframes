@@ -56,6 +56,7 @@ export {
   VALID_CANVAS_RESOLUTIONS,
   normalizeResolutionFlag,
   isAspectAgnosticResolutionAlias,
+  resolveResolutionFlagPair,
   checkOutputResolutionCompatibility,
   suggestMatchingPreset,
   parseFps,

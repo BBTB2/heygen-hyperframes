@@ -180,6 +180,7 @@ export {
   VALID_CANVAS_RESOLUTIONS,
   normalizeResolutionFlag,
   isAspectAgnosticResolutionAlias,
+  resolveResolutionFlagPair,
   checkOutputResolutionCompatibility,
   suggestMatchingPreset,
   COMPOSITION_VARIABLE_TYPES,

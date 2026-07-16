@@ -1244,6 +1244,47 @@ describe("checkRenderResolutionPreflight", () => {
       expect(result?.kind).toBe("aspect-mismatch");
       expect(result?.message).toContain("--resolution portrait");
     });
+
+    // Rames Δ2 on PR #2529: the earlier "downgrade aspect-mismatch to
+    // undefined" preflight cleared *un-remapped* mismatches, so two input
+    // classes below regressed from an early actionable error to a late throw
+    // deep in `resolveDeviceScaleFactor` (browser + ffmpeg already up).
+    // The fix computes the *effective* preset via `suggestMatchingPreset`
+    // (mirroring the compile stage) and re-checks against that, so only
+    // genuinely-fixable mismatches clear early.
+
+    it("blocks IG 4:5 (non-preset aspect) early with an aspect-aware message", async () => {
+      // 1080×1350 is a 4:5 portrait — no canonical preset shares that aspect,
+      // so `suggestMatchingPreset` returns undefined and `adaptAspectAgnosticResolution`
+      // keeps the original preset. Before the fix, aspect-agnostic downgraded
+      // the mismatch here to undefined; now the preflight surfaces it early.
+      const result = await checkRenderResolutionPreflight(comp(1080, 1350), "landscape", agnostic);
+      expect(result?.kind).toBe("aspect-mismatch");
+      // No sibling preset to suggest → message falls back to the "pick a preset
+      // whose orientation matches" hint (see `buildAspectMismatch` in
+      // `@hyperframes/parsers/outputResolutionCompatibility`).
+      expect(result?.message).toMatch(/preset whose orientation matches|omit --resolution/i);
+    });
+
+    it("blocks a portrait-4K comp + `1080p` downsample early (orientation-flip masks the tier gap)", async () => {
+      // 2160×3840 (portrait 4K) + `--resolution 1080p` — the compile stage
+      // remaps `landscape` → `portrait` (1080×1920), and *then* the preset
+      // is smaller than the composition. The un-remapped preflight let this
+      // slip through as an aspect-mismatch downgrade; the remap-then-check
+      // catches the real failure — downsampling — early.
+      const result = await checkRenderResolutionPreflight(comp(2160, 3840), "landscape", agnostic);
+      expect(result?.kind).toBe("downsampling");
+    });
+
+    it("blocks a portrait 720p comp + `1080p` non-integer upscale early (orientation-flip masks the fractional DPR)", async () => {
+      // 720×1280 (portrait 720p) + `--resolution 1080p` — remap `landscape`
+      // → `portrait` (1080×1920). widthRatio = 1080 / 720 = 1.5, which
+      // `resolveDeviceScaleFactor` rejects. Surfacing it in preflight beats
+      // failing after Chrome + ffmpeg spin up. Same class as Miga's
+      // important note on PR #2529.
+      const result = await checkRenderResolutionPreflight(comp(720, 1280), "landscape", agnostic);
+      expect(result?.kind).toBe("non-integer-scale");
+    });
   });
 });
 

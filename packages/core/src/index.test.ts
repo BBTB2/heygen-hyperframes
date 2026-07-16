@@ -63,6 +63,42 @@ describe("@hyperframes/core public API exports", () => {
       expect(core.isAspectAgnosticResolutionAlias(undefined)).toBe(false);
     });
 
+    it("exports resolveResolutionFlagPair — the pair every distributed entrypoint must forward", () => {
+      // The single source of truth every distributed adapter reads
+      // (`hyperframes cloudrun render`, `hyperframes lambda render`,
+      // `hyperframes lambda render-batch`). Divergent copies across those
+      // callers is what shipped the portrait-1080p failure this helper
+      // exists to prevent (PR #2529). Case-insensitive on the raw input.
+      expect(core.resolveResolutionFlagPair("1080p")).toEqual({
+        outputResolution: "landscape",
+        outputResolutionAspectAgnostic: true,
+      });
+      expect(core.resolveResolutionFlagPair("4K")).toEqual({
+        outputResolution: "landscape-4k",
+        outputResolutionAspectAgnostic: true,
+      });
+      // Canonical preset — aspect-agnostic stays false.
+      expect(core.resolveResolutionFlagPair("portrait")).toEqual({
+        outputResolution: "portrait",
+        outputResolutionAspectAgnostic: false,
+      });
+      // Orientation-suffixed alias — aspect-agnostic stays false.
+      expect(core.resolveResolutionFlagPair("1080p-portrait")).toEqual({
+        outputResolution: "portrait",
+        outputResolutionAspectAgnostic: false,
+      });
+      // Unknown / empty / undefined → both fields degrade cleanly so
+      // callers can produce their own "invalid" UX.
+      expect(core.resolveResolutionFlagPair("8k")).toEqual({
+        outputResolution: undefined,
+        outputResolutionAspectAgnostic: false,
+      });
+      expect(core.resolveResolutionFlagPair(undefined)).toEqual({
+        outputResolution: undefined,
+        outputResolutionAspectAgnostic: false,
+      });
+    });
+
     it("exports TIMELINE_COLORS", () => {
       expect(core.TIMELINE_COLORS).toBeDefined();
       expect(core.TIMELINE_COLORS.video).toBeDefined();

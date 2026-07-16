@@ -92,6 +92,7 @@ import {
   normalizeResolutionFlag,
   isAspectAgnosticResolutionAlias,
   checkOutputResolutionCompatibility,
+  suggestMatchingPreset,
   parseFps,
   fpsToNumber,
   fpsToFfmpegArg,
@@ -1216,20 +1217,37 @@ export async function checkRenderResolutionPreflight(
   // Couldn't determine the composition's actual dimensions — defer to the
   // pipeline's own defense-in-depth check rather than guess.
   if (!dims) return undefined;
+  // Aspect-agnostic aliases (`--resolution 1080p` / `hd` / `4k` / `uhd`)
+  // don't nail an orientation — the compile stage remaps them to the
+  // composition's orientation via `adaptAspectAgnosticResolution` +
+  // `suggestMatchingPreset`. Mirror that remap here BEFORE running the
+  // compatibility check so the early rejection reflects the *effective*
+  // preset the pipeline will actually use.
+  //
+  // Doing this pre-check (rather than post-hoc "downgrade aspect-mismatch")
+  // is what makes the following cases fail early with an aspect-aware
+  // message instead of throwing deep in the compile stage after Chrome +
+  // ffmpeg have already spun up (Rames Δ2 on PR #2529):
+  //
+  //   - Non-preset aspect (e.g. IG 4:5 1080×1350): no sibling preset
+  //     matches → `suggestMatchingPreset` returns `undefined` → we keep the
+  //     original preset and surface the aspect-mismatch normally.
+  //   - Orientation-flip + tier-too-small (portrait-4K comp 2160×3840 +
+  //     `--resolution 1080p`): remaps `landscape` → `portrait` (1080×1920),
+  //     re-check catches the downsample early with a clear message.
+  const effective =
+    modes.aspectAgnostic === true
+      ? (suggestMatchingPreset(dims.width, dims.height, outputResolution) ?? outputResolution)
+      : outputResolution;
   const compat = checkOutputResolutionCompatibility({
     compositionWidth: dims.width,
     compositionHeight: dims.height,
-    outputResolution,
+    outputResolution: effective,
     alphaRequested: modes.alphaRequested,
     hdrRequested: modes.hdrRequested,
   });
   // Narrow to the incompatible case; `message`/`kind` are always set there.
   if (compat.ok || !compat.message || !compat.kind) return undefined;
-  // Aspect-agnostic aliases delegate orientation to the composition — a
-  // landscape-vs-portrait mismatch is expected and self-heals in the compile
-  // stage. Only *aspect-mismatch* is downgraded; other issue kinds still
-  // block (see the `aspectAgnostic` note above).
-  if (modes.aspectAgnostic && compat.kind === "aspect-mismatch") return undefined;
   return { message: compat.message, kind: compat.kind };
 }
 
