@@ -50,6 +50,7 @@ type GsapWindow = {
   propertyValues: Record<string, string | number>;
   fromPropertyValues?: Record<string, string | number>;
   overwriteAuto: boolean;
+  immediateRender: boolean;
   method: string;
   /** True for an off-timeline `gsap.set(...)` (applied once at load). */
   global?: boolean;
@@ -168,6 +169,7 @@ async function extractGsapWindows(script: string): Promise<GsapWindow[]> {
       propertyValues: animation.properties,
       fromPropertyValues: animation.fromProperties,
       overwriteAuto: unwrapRaw(animation.extras?.overwrite) === "auto",
+      immediateRender: unwrapRaw(animation.extras?.immediateRender) === "true",
       method: animation.method,
       global: animation.global,
       raw: synthesizeWindowRaw(parsed.timelineVar, animation),
@@ -211,6 +213,7 @@ function isHiddenGsapState(values: Record<string, string | number>): boolean {
 function extractStandaloneHiddenSelectors(script: string): Set<string> {
   const selectors = new Set<string>();
   const source = stripJsComments(script);
+  const functionRanges = collectFunctionBodyRanges(source);
   const aliases = new Map<string, string>();
   for (const match of source.matchAll(
     /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(["'`])([^"'`]+)\2\s*;/g,
@@ -220,6 +223,8 @@ function extractStandaloneHiddenSelectors(script: string): Set<string> {
   const pattern = /gsap\.set\s*\(\s*([^,]+?)\s*,\s*\{([\s\S]*?)\}\s*\)/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(source)) !== null) {
+    // Skip callback/handler bodies; keep IIFEs (they run at parse time).
+    if (indexInsideNonIifeRange(match.index, source, functionRanges)) continue;
     const target = (match[1] ?? "").trim();
     const selector = /^(["'`])([^"'`]+)\1$/.exec(target)?.[2] ?? aliases.get(target);
     if (!selector) continue;
@@ -605,6 +610,12 @@ function scanScriptsForRegexMatches(
 // geometry, per-init random values — renders differently per worker, visible as
 // position jumps or dead animation at chunk boundaries.
 
+const RELATIVE_TWEEN_VALUE = /^[+-]=/;
+
+function isRelativeTweenValue(value: string | number | undefined): boolean {
+  return typeof value === "string" && RELATIVE_TWEEN_VALUE.test(value.trim());
+}
+
 // DOM reads split by transform sensitivity. Transform-sensitive reads report
 // live animated geometry, so their result depends on the worker's own seek
 // order. Transform-invariant layout reads (intrinsic size, path geometry) give
@@ -634,6 +645,58 @@ function indexTagsByToken(tags: OpenTag[]): Map<string, OpenTag[]> {
       addToken(`.${cls}`, tag);
   }
   return tagsByToken;
+}
+
+function resolveSelectorTagIndexes(
+  selector: string,
+  tagsByToken: Map<string, OpenTag[]>,
+): Set<number> {
+  const indexes = new Set<number>();
+  for (const token of targetedSelectorTokens(selector)) {
+    for (const tag of tagsByToken.get(token) ?? []) indexes.add(tag.index);
+  }
+  return indexes;
+}
+
+// A selector whose comma groups are each a single simple compound (no
+// combinators, no attribute selectors) — the only shape that resolves
+// faithfully through simple #id/.class tokens. Descendant selectors
+// (".card-a .icon") and composition-scoped selectors
+// ('[data-composition-id="a"] .dot') would mis-join across elements or
+// compositions, so token-based matching must bail on them.
+function selectorResolvesFaithfully(selector: string): boolean {
+  return selector.split(",").every((group) => {
+    const token = group.trim();
+    if (!token || token.includes("[")) return false;
+    return !/[\s>+~]/.test(token);
+  });
+}
+
+// Two GSAP targets provably hit the same element when their stable identities
+// are equal, or when their (faithfully resolvable) selectors resolve to
+// intersecting element sets — an id selector and a class selector can name the
+// same node. Selectors with combinators or attribute parts are skipped rather
+// than guessed at.
+function targetsShareElement(
+  a: { selector: string; identity?: string },
+  b: { selector: string; identity?: string },
+  tagsByToken: Map<string, OpenTag[]>,
+): boolean {
+  if (
+    !targetHasNoStableIdentity(a.selector, a.identity) &&
+    !targetHasNoStableIdentity(b.selector, b.identity) &&
+    (a.identity ?? a.selector) === (b.identity ?? b.selector)
+  ) {
+    return true;
+  }
+  if (!selectorResolvesFaithfully(a.selector) || !selectorResolvesFaithfully(b.selector)) {
+    return false;
+  }
+  const aTags = resolveSelectorTagIndexes(a.selector, tagsByToken);
+  if (aTags.size === 0) return false;
+  const bTags = resolveSelectorTagIndexes(b.selector, tagsByToken);
+  for (const index of bTags) if (aTags.has(index)) return true;
+  return false;
 }
 
 /** Source from the delimiter at `openIndex` to its matching closer, inclusive. */
@@ -940,6 +1003,25 @@ function indexInsideAnyRange(
   return ranges.some((range) => index > range.start && index < range.end);
 }
 
+function isIifeBody(source: string, range: { start: number; end: number }): boolean {
+  let j = range.end;
+  while (j < source.length && /\s/.test(source[j]!)) j++;
+  if (source[j] !== ")") return false;
+  j++;
+  while (j < source.length && /\s/.test(source[j]!)) j++;
+  return source[j] === "(" || source.startsWith(".call", j) || source.startsWith(".apply", j);
+}
+
+function indexInsideNonIifeRange(
+  index: number,
+  source: string,
+  ranges: Array<{ start: number; end: number }>,
+): boolean {
+  return ranges.some(
+    (range) => index > range.start && index < range.end && !isIifeBody(source, range),
+  );
+}
+
 // Simple selectors whose authored CSS (style blocks or inline styles) sets
 // opacity to EXACTLY zero. The declaration regex is boundary-anchored so
 // `opacity: 0.98` never matches; it ends at `;` or end of input, which also
@@ -1133,9 +1215,13 @@ export const gsapRules: LintRule<LintContext>[] = [
             `${firstVisible.position.toFixed(2)}s. It will cover earlier render frames, often as a blank/white video.`,
           selector,
           elementId: readAttr(tag.raw, "id") || undefined,
+          // gsap_timeline_set_initial_hide warns on `tl.set(..., 0)` initial hides
+          // (a zero-duration set at 0 does not render at exactly t=0), so this hint
+          // must not recommend that pattern — advise authored CSS or an immediate
+          // gsap.set() instead, keeping the two rules' advice consistent.
           fixHint:
-            `Add \`opacity: 0\` to "${selector}" in CSS/inline styles, or add ` +
-            `\`tl.set("${selector}", { opacity: 0 }, 0)\` before the reveal tween.`,
+            `Add \`opacity: 0\` to "${selector}" in CSS/inline styles, or add an immediate ` +
+            `\`gsap.set("${selector}", { opacity: 0 })\` (outside the timeline) before the reveal tween.`,
           snippet: truncateSnippet(firstVisible.raw),
         });
       }
@@ -1782,6 +1868,73 @@ export const gsapRules: LintRule<LintContext>[] = [
     return findings;
   },
 
+  // gsap_relative_value_second_writer — a relative tween value ("+=..."/"-=...") on a
+  // property that another writer is still ACTIVE on when the relative tween starts.
+  // The relative tween captures its base at tween INIT, which happens on first render:
+  // the sequential path inits it mid-flight of the other writer, a cold render worker
+  // landing later inits it with the other writer's end state — the same frame then
+  // renders at two different positions (a visible snap at chunk boundaries).
+  // GSAP renders children in start-time order within a single seek pass, so a writer
+  // that completes strictly BEFORE the relative tween's start yields identical bases
+  // on every seek path and is never flagged. Single-writer relative values are
+  // seek-stable. from()/fromTo() resolve their values at build (immediateRender), so
+  // they are exempt. The position PARAMETER ("+=0.5") is not a tween value — the
+  // parser keeps it out of properties — so it can never be flagged here.
+  async ({ scripts, tags }) => {
+    const findings: HyperframeLintFinding[] = [];
+    const tagsByToken = indexTagsByToken(tags);
+    for (const script of scripts) {
+      if (!/gsap\.timeline/.test(script.content)) continue;
+      const windows = await cachedExtractGsapWindows(script.content);
+      for (const win of windows) {
+        if (win.method === "from" || win.method === "fromTo") continue;
+        if (win.overwriteAuto) continue;
+        if (targetHasNoStableIdentity(win.targetSelector, win.targetIdentity)) continue;
+        const relativeProps = Object.entries(win.propertyValues)
+          .filter(([, value]) => isRelativeTweenValue(value))
+          .map(([prop]) => prop);
+        if (relativeProps.length === 0) continue;
+        const target = { selector: win.targetSelector, identity: win.targetIdentity };
+        for (const other of windows) {
+          if (other === win) continue;
+          if (other.position > win.position || other.end <= win.position) continue;
+          const sharedProps = relativeProps.filter((prop) => other.properties.includes(prop));
+          if (sharedProps.length === 0) continue;
+          if (
+            !targetsShareElement(
+              target,
+              { selector: other.targetSelector, identity: other.targetIdentity },
+              tagsByToken,
+            )
+          ) {
+            continue;
+          }
+          const values = sharedProps
+            .map((prop) => `${prop}: "${win.propertyValues[prop]}"`)
+            .join(", ");
+          const overlapEnd = Math.min(win.end, other.end);
+          const formatTime = (t: number): string => (Number.isFinite(t) ? `${t.toFixed(2)}s` : "∞");
+          findings.push({
+            code: "gsap_relative_value_second_writer",
+            severity: "error",
+            message:
+              `Relative value(s) ${values} on "${win.targetSelector}" start while another writer for the same ` +
+              `propert${sharedProps.length > 1 ? "ies" : "y"} is active between ${formatTime(win.position)} and ${formatTime(overlapEnd)}. ` +
+              "Relative tweens capture their base at tween init: the sequential path inits mid-flight of the other " +
+              "writer, a cold render worker landing later inits with its end state — the same frame renders at two " +
+              "different positions (snap at chunk boundaries).",
+            selector: win.targetSelector,
+            fixHint:
+              `Use absolute values for ${sharedProps.join(", ")}, or a fromTo() with explicit endpoints, so every seek ` +
+              "path resolves the same state. Single-writer relative values are safe; the conflict is the second writer.",
+            snippet: truncateSnippet(`${win.raw}\n${other.raw}`),
+          });
+        }
+      }
+    }
+    return findings;
+  },
+
   // gsap_repeat_refresh_relative_value — repeatRefresh re-resolves the tween's values
   // on every repeat iteration, so a relative value ACCUMULATES per cycle. A cold render
   // worker seeking non-linearly into iteration N skips the accumulation a sequential
@@ -2075,6 +2228,73 @@ export const gsapRules: LintRule<LintContext>[] = [
             snippet: truncateSnippet(match[0] + firstVars.slice(1)),
           });
         }
+      }
+    }
+    return findings;
+  },
+
+  // gsap_timeline_set_initial_hide — a zero-duration tl.set(...) at position 0 inside
+  // the paused timeline does NOT render while the playhead sits exactly at 0 (verified
+  // against this repo's GSAP: tl.time(0) leaves the target untouched; only a seek past
+  // 0 applies it). Frame 0 therefore shows the UN-hidden state, then the element pops
+  // hidden on frame 1 — and only for the worker that renders frame 0. Targets already
+  // hidden by authored CSS/inline styles or by a standalone gsap.set are exempt: the
+  // tl.set is then a defensive re-assertion and frame 0 is hidden anyway.
+  //
+  // Only sets that precede every tween in source order qualify: the parser resolves a
+  // mutated position variable (`var t = 0; ...; tl.set(sel, vars, t)`) to its INITIAL
+  // binding, so late hard-kills can masquerade as position-0 sets. Genuine
+  // initial-state hides are authored before the timeline's tweens.
+  async ({ scripts, styles, tags }) => {
+    const findings: HyperframeLintFinding[] = [];
+    const cssHiddenSelectors = collectCssOpacityZeroSelectors(styles, tags);
+    const tagsByToken = indexTagsByToken(tags);
+    for (const script of scripts) {
+      if (!/gsap\.timeline/.test(script.content)) continue;
+      const windows = await cachedExtractGsapWindows(script.content);
+      const alreadyHidden = new Set([
+        ...cssHiddenSelectors,
+        ...extractStandaloneHiddenSelectors(script.content),
+      ]);
+      const isInstantHold = (win: GsapWindow): boolean =>
+        win.method === "set" ||
+        ((win.method === "to" || win.method === "fromTo") && win.end === win.position);
+      const firstTweenIndex = windows.findIndex((win) => !isInstantHold(win));
+      const initialHolds = firstTweenIndex < 0 ? windows : windows.slice(0, firstTweenIndex);
+      for (const win of initialHolds) {
+        if (!isInstantHold(win) || win.position !== 0) continue;
+        if (win.global || win.immediateRender) continue;
+        if (targetHasNoStableIdentity(win.targetSelector, win.targetIdentity)) continue;
+        const targetTokens = [...targetedSelectorTokens(win.targetSelector)];
+        const hiddenByToken =
+          targetTokens.length > 0 && targetTokens.every((token) => alreadyHidden.has(token));
+        const resolvedTags = targetTokens.flatMap((token) => tagsByToken.get(token) ?? []);
+        const hiddenByElement =
+          resolvedTags.length > 0 &&
+          resolvedTags.every((tag) =>
+            tagSimpleSelectors(tag).some((token) => alreadyHidden.has(token)),
+          );
+        if (hiddenByToken || hiddenByElement) continue;
+        const offset = win.propertyValues["strokeDashoffset"];
+        const hidesByOffset = numberValue(offset) !== null && !zeroValue(offset);
+        const hides =
+          isHiddenGsapState(win.propertyValues) ||
+          zeroValue(win.propertyValues["scale"]) ||
+          hidesByOffset;
+        if (!hides) continue;
+        findings.push({
+          code: "gsap_timeline_set_initial_hide",
+          severity: "warning",
+          message:
+            `Initial hidden state for "${win.targetSelector}" is set via tl.set(...) at position 0 inside the paused ` +
+            "timeline. A zero-duration set at 0 does not render while the playhead sits exactly at 0, so frame 0 " +
+            "shows the un-hidden state.",
+          selector: win.targetSelector,
+          fixHint:
+            "Use gsap.set(...) (immediate, outside the timeline) for initial states, or author the hidden state " +
+            "directly in CSS/attributes.",
+          snippet: truncateSnippet(win.raw),
+        });
       }
     }
     return findings;
