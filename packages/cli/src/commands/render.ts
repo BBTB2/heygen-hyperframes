@@ -80,6 +80,7 @@ import { formatRenderOutputTimestamp } from "@hyperframes/core";
 import { runEnvironmentChecks } from "../browser/preflight.js";
 import { detectH264EncoderMode } from "../browser/ffmpeg.js";
 import { chromeLaunchRemediation } from "../browser/linuxDeps.js";
+import { macosOldChromeCrashRemediation } from "../browser/macosOldChromeCrash.js";
 import { killOrphanedProcesses } from "../utils/orphanCleanup.js";
 import {
   markRenderSucceeded,
@@ -2104,6 +2105,14 @@ function handleRenderError(
   const remediation = chromeLaunchRemediation(message);
   if (remediation) {
     errorBox("Render failed — Chrome could not launch", message, remediation);
+    process.exit(1);
+  }
+  // macOS <13 dyld Symbol-not-found on the pinned chrome-headless-shell
+  // build. Different remediation shape (older shell + env-var override)
+  // than the Linux shared-lib install, so it lives in its own detector.
+  const macosRemediation = macosOldChromeCrashRemediation(message);
+  if (macosRemediation) {
+    errorBox("Render failed — Chrome could not launch", message, macosRemediation);
     process.exit(1);
   }
   errorBox("Render failed", message, hint);
