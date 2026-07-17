@@ -57,7 +57,7 @@
       "name": "@hyperframes/cli",
       "version": "0.7.60",
       "bin": {
-        "hyperframes": "./dist/cli.js",
+        "hyperframes": "./bin/hyperframes.mjs",
       },
       "dependencies": {
         "@hono/node-server": "^1.8.0",
@@ -84,6 +84,7 @@
         "@hyperframes/engine": "workspace:*",
         "@hyperframes/gcp-cloud-run": "workspace:*",
         "@hyperframes/lint": "workspace:*",
+        "@hyperframes/parsers": "workspace:*",
         "@hyperframes/producer": "workspace:*",
         "@hyperframes/studio": "workspace:*",
         "@hyperframes/studio-server": "workspace:*",
@@ -133,6 +134,7 @@
       "dependencies": {
         "@hono/node-server": "^1.13.0",
         "@hyperframes/core": "workspace:^",
+        "@hyperframes/parsers": "workspace:^",
         "hono": "^4.6.0",
         "linkedom": "^0.18.12",
         "puppeteer": "^25.2.1",
